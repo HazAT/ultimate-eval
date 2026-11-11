@@ -1,0 +1,14 @@
+{
+  "name": "today",
+  "families": {
+    "default": { "model": "claude-code/claude-opus-5-5", "thinking": "xhigh" },
+    "fast": { "model": "openai-codex/gpt-6.1-sol", "thinking": "medium" },
+    "tiny": { "model": "openai-codex/gpt-6-luna", "thinking": "low" },
+    "review": { "model": "openai-codex/gpt-6-astra", "thinking": "high" }
+  },
+  "roles": {
+    "ultimate": "default",
+    "coordinator": "default",
+    "worker": "fast"
+  }
+}

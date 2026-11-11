@@ -1,0 +1,282 @@
+/**
+ * The instance under test, seen the way its web UI sees it: the `/api/events` stream (conversation list, task graph,
+ * documents of conversation 1 and of the standing @ultimate), and the user's own HTTP calls. Nothing here reads the
+ * instance's sqlite; that waits until the server has stopped (score.ts).
+ */
+
+/** One stored entry as `/api/conversations/:id/history` returns it. */
+export type Entry = {
+  id: number
+  kind: string
+  conversationId: number
+  model?: {
+    role: string
+    content: unknown
+    timestamp?: number
+    usage?: Usage
+    provider?: string
+    model?: string
+    stopReason?: string
+  }[]
+  data?: unknown
+}
+export type Usage = {
+  input: number
+  output: number
+  cacheRead: number
+  cacheWrite: number
+  totalTokens: number
+  cost: { total: number }
+}
+export type Summary = {
+  id: number
+  parentConversationId?: number
+  branchOf?: { conversationId: number; at: number }
+  label?: string
+  title?: string
+  cwd?: string
+  busy: boolean
+  inputAt?: number
+  answerAt?: number
+}
+export type Question = {
+  text: string
+  kind: 'choice' | 'multi' | 'confirm' | 'text' | 'scale'
+  ref?: string
+  options?: { label: string; key?: string; detail?: string; recommended?: boolean }[]
+  scale?: { min: number; max: number; low?: string; high?: string }
+}
+export type Message = {
+  id: number
+  from: number | 'user' | 'remote'
+  to: number | 'user' | 'remote'
+  text: string
+  at: number
+  reply: boolean
+  state: string
+  /** The message this one answers. */
+  re?: number
+  questions?: Question[]
+}
+
+type Op =
+  | ['r', unknown]
+  | ['s', (string | number)[], unknown]
+  | ['d', (string | number)[]]
+  | ['a', (string | number)[], string]
+  | ['t', (string | number)[], number]
+  | ['p', (string | number)[], number, number, unknown[]]
+  | ['m', (string | number)[], number[]]
+
+/** Apply chord delta ops (the stream's `docOps`) to a plain JSON value, returning the new value. */
+export function applyOps(value: unknown, ops: readonly Op[]): unknown {
+  let root = structuredClone(value)
+  for (const op of ops) {
+    if (op[0] === 'r') {
+      root = structuredClone(op[1])
+      continue
+    }
+    const path = op[1]
+    const parentPath = op[0] === 'p' || op[0] === 'm' ? path : path.slice(0, -1)
+    let target = root as Record<string | number, unknown>
+    for (const segment of parentPath) target = target[segment] as Record<string | number, unknown>
+    const key = path[path.length - 1]!
+    switch (op[0]) {
+      case 's':
+        target[key] = structuredClone(op[2])
+        break
+      case 'd':
+        if (Array.isArray(target)) target.splice(key as number, 1)
+        else delete target[key]
+        break
+      case 'a':
+        target[key] = `${target[key] as string}${op[2]}`
+        break
+      case 't':
+        target[key] = (target[key] as string).slice(op[2])
+        break
+      case 'p':
+        ;(target as unknown as unknown[]).splice(op[2], op[3], ...structuredClone(op[4]))
+        break
+      case 'm': {
+        const list = target as unknown as unknown[]
+        const old = list.slice()
+        op[2].forEach((from, i) => (list[i] = old[from]))
+        break
+      }
+    }
+  }
+  return root
+}
+
+/** Open questions to the user: reply-expected messages to `user` that are delivered and unanswered. */
+export const openQuestions = (board: { messages?: Message[] } | undefined) =>
+  (board?.messages ?? []).filter((m) => m.to === 'user' && m.reply && m.state === 'delivered')
+
+export class Instance {
+  readonly base: string
+  conversations: Summary[] = []
+  tasks: { tasks?: Record<string, { state?: { status?: string } }> } = {}
+  /** Documents by `<conversation>:<kind>`. */
+  docs = new Map<string, unknown>()
+  /** Time (ms) anything last changed on the stream: the hang watchdog's clock. */
+  lastChange = Date.now()
+  private controller = new AbortController()
+  private stream?: string
+  private subs = new Map<number, { conversation: number; docs: string[] }>()
+  private listeners = new Set<() => void>()
+
+  constructor(base: string) {
+    this.base = base
+  }
+
+  private headers() {
+    return { 'content-type': 'application/json', origin: this.base }
+  }
+
+  async get<T>(path: string): Promise<T> {
+    const response = await fetch(this.base + path, { headers: { origin: this.base } })
+    if (!response.ok) throw new Error(`GET ${path}: ${response.status} ${await response.text()}`)
+    return (await response.json()) as T
+  }
+
+  async post<T>(path: string, body: unknown): Promise<T> {
+    const response = await fetch(this.base + path, {
+      method: 'POST',
+      headers: this.headers(),
+      body: JSON.stringify(body),
+    })
+    const text = await response.text()
+    if (!response.ok) throw new Error(`POST ${path}: ${response.status} ${text}`)
+    return JSON.parse(text) as T
+  }
+
+  /** Call an extension action as the UI does (a loopback Origin makes it the user's). */
+  async action<T>(extension: string, action: string, args: unknown): Promise<T> {
+    return (await this.post<{ result: T }>(`/api/extensions/${extension}/actions/${action}`, { args }))
+      .result
+  }
+
+  /** Type a message into a conversation, as the composer does (steer when it is busy). */
+  submit(conversation: number, text: string) {
+    const busy = this.conversations.find((c) => c.id === conversation)?.busy
+    return this.post(`/api/conversations/${conversation}/submit`, {
+      text,
+      ...(busy ? { whenBusy: 'steer' } : {}),
+    })
+  }
+
+  /** Every stored entry of a conversation, oldest first. */
+  async history(conversation: number): Promise<Entry[]> {
+    const all: Entry[] = []
+    let before = Number.MAX_SAFE_INTEGER
+    for (;;) {
+      const page = await this.get<{ entries: Entry[]; before?: number }>(
+        `/api/conversations/${conversation}/history?before=${before}`,
+      )
+      all.push(...page.entries)
+      if (!page.before) break
+      before = page.before
+    }
+    return all.reverse()
+  }
+
+  doc<T>(conversation: number, kind: string) {
+    return this.docs.get(`${conversation}:${kind}`) as T | undefined
+  }
+
+  /** Is anything at all working: a busy conversation or a running task? */
+  busy() {
+    return (
+      this.conversations.some((c) => c.busy) ||
+      Object.values(this.tasks.tasks ?? {}).some((t) => t.state?.status === 'running')
+    )
+  }
+
+  /** Resolve on the next change on the stream, or after `ms`. */
+  changed(ms: number) {
+    return new Promise<void>((done) => {
+      const timer = setTimeout(finish, ms)
+      function finish() {
+        clearTimeout(timer)
+        listeners.delete(finish)
+        done()
+      }
+      const listeners = this.listeners
+      listeners.add(finish)
+    })
+  }
+
+  /** Watch `docs` on `conversation` (documents arrive as snapshots, then ops). */
+  async watch(conversation: number, docs: string[]) {
+    const sub = this.subs.size + 1
+    this.subs.set(sub, { conversation, docs })
+    if (this.stream) await this.subscribe(sub)
+  }
+
+  private async subscribe(sub: number) {
+    const { conversation, docs } = this.subs.get(sub)!
+    await this.post(`/api/events/${this.stream}/${sub}`, { conversation, docs, view: false })
+  }
+
+  /** Open the event stream; it reconnects until `close`. Resolves once the first snapshot is in. */
+  async open() {
+    let ready: () => void
+    const first = new Promise<void>((done) => (ready = done))
+    void (async () => {
+      while (!this.controller.signal.aborted) {
+        try {
+          await this.read(() => ready())
+        } catch (error) {
+          if (this.controller.signal.aborted) return
+          // A restart or a dropped stream: open it again, as the UI does.
+        }
+        await new Promise((done) => setTimeout(done, 500))
+      }
+    })()
+    await first
+  }
+
+  private async read(onReady: () => void) {
+    const response = await fetch(this.base + '/api/events', {
+      headers: { origin: this.base },
+      signal: this.controller.signal,
+    })
+    if (!response.ok || !response.body) throw new Error(`events: ${response.status}`)
+    const decoder = new TextDecoder()
+    let buffer = ''
+    const subOf = new Map<number, number>()
+    for await (const chunk of response.body) {
+      buffer += decoder.decode(chunk as Uint8Array, { stream: true })
+      let end
+      while ((end = buffer.indexOf('\n\n')) >= 0) {
+        const block = buffer.slice(0, end)
+        buffer = buffer.slice(end + 2)
+        const name = /^event: (.*)$/m.exec(block)?.[1]
+        const data = [...block.matchAll(/^data: (.*)$/gm)].map((m) => m[1]!)
+        if (!name || !data.length) continue
+        const payload = JSON.parse(data.at(-1)!)
+        const sub = data.length > 1 ? Number(data[0]) : undefined
+        if (name === 'stream') {
+          this.stream = payload.id
+          for (const id of this.subs.keys()) {
+            subOf.set(id, this.subs.get(id)!.conversation)
+            await this.subscribe(id)
+          }
+          onReady()
+        } else if (name === 'conversations') this.conversations = payload
+        else if (name === 'tasks') this.tasks = payload
+        else if ((name === 'doc' || name === 'docOps') && sub !== undefined) {
+          const key = `${this.subs.get(sub)?.conversation}:${payload.kind}`
+          this.docs.set(key, name === 'doc' ? payload.value : applyOps(this.docs.get(key) ?? {}, payload.ops))
+        } else continue
+        this.lastChange = Date.now()
+        for (const listener of [...this.listeners]) listener()
+      }
+    }
+  }
+
+  close() {
+    this.controller.abort()
+  }
+}

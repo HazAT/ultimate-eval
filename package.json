@@ -1,0 +1,18 @@
+{
+  "name": "ultimate-eval",
+  "private": true,
+  "type": "module",
+  "engines": {
+    "node": ">=26"
+  },
+  "scripts": {
+    "eval": "node src/cli.ts",
+    "check": "tsc -p .",
+    "test": "node --test test/"
+  },
+  "devDependencies": {
+    "@types/node": "^24.0.0",
+    "playwright-core": "1.63.0",
+    "typescript": "^5.9.0"
+  }
+}
