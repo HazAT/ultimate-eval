@@ -10,6 +10,7 @@ import type { ChildProcess } from 'node:child_process'
 import { createHash } from 'node:crypto'
 import { cpSync, existsSync, mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { createServer } from 'node:net'
+import { DatabaseSync } from 'node:sqlite'
 import { homedir } from 'node:os'
 import { join, resolve } from 'node:path'
 import { Instance, openQuestions } from './api.ts'
@@ -96,6 +97,28 @@ export function folderSha(dir: string) {
   return hash.digest('hex').slice(0, 12)
 }
 
+/**
+ * The definition each conversation was started as, from the `subagents.started` events in a stopped home's database:
+ * read only once the server is down, so no storage internals are touched while it runs.
+ */
+export function startedAgents(database: string): Record<number, string> {
+  if (!existsSync(database)) return {}
+  const db = new DatabaseSync(database, { readOnly: true })
+  try {
+    const out: Record<number, string> = {}
+    for (const row of db
+      .prepare("select record from entries where record like '%\"event.subagents.started\"%'")
+      .all() as { record: string }[]) {
+      const entry = JSON.parse(row.record) as { kind: string; data?: { data?: { id?: number; agent?: string } } }
+      const started = entry.data?.data
+      if (entry.kind === 'event.subagents.started' && started?.id && started.agent) out[started.id] = started.agent
+    }
+    return out
+  } finally {
+    db.close()
+  }
+}
+
 /** Claude Code keeps a session folder per working directory; these are the run's. */
 const claudeProjects = (tmp: string) => {
   const dir = join(homedir(), '.claude/projects')
@@ -146,11 +169,14 @@ export async function run(options: RunOptions) {
   const launchedAt = Date.now()
   let startedAt = launchedAt
   let ultimateId = 0
+  /** Where the run stood the last time the instance answered: kept for every failure, errors included. */
+  let lastStuck: unknown = null
   const result: Record<string, unknown> = { id, pins, startedAt: new Date(startedAt).toISOString() }
 
   // Ctrl+C or a TERM ends the run as a failure: the loop sees `cancelled`, the finally block cleans up. A second
   // signal kills the groups at once and leaves.
   let cancelled = false
+  const cancel = new AbortController()
   const groups = new Set<ChildProcess>()
   const onSignal = (signal: NodeJS.Signals) => {
     if (cancelled) {
@@ -158,6 +184,7 @@ export async function run(options: RunOptions) {
       process.exit(130)
     }
     cancelled = true
+    cancel.abort()
     log(`${signal}: stopping the run`)
     instance?.close()
   }
@@ -235,7 +262,6 @@ export async function run(options: RunOptions) {
     // The hang clock: what Ultimate said, a real change of its state, or something the user did. Simulated-user calls
     // that only wait are no progress.
     let lastNews = Date.now()
-    let lastStuck: unknown = null
     let calls = 0
     let nudges = 0
 
@@ -262,7 +288,13 @@ export async function run(options: RunOptions) {
       lastSimAt = Date.now()
       const at = Date.now()
       try {
-        const call = await decide(prompt, simCwd)
+        // Bounded by the run's budget and by cancellation, so a slow call cannot outlive either.
+        const left = firstPromptAt ? firstPromptAt + BUDGET_MIN * 60000 - Date.now() : 180_000
+        const call = await decide(
+          prompt,
+          simCwd,
+          AbortSignal.any([cancel.signal, AbortSignal.timeout(Math.max(1000, left))]),
+        )
         const record: (typeof simLog)[number] = { at, prompt, decision: call.decision, costUsd: call.costUsd, ms: call.ms }
         simLog.push(record)
         return { call, cards, quietMinutes, record }
@@ -361,6 +393,13 @@ export async function run(options: RunOptions) {
         break
       }
       const turn = await ask(false)
+      // The budget is absolute: a simulated-user call that ends past it cannot finish the run.
+      const afterMin = (Date.now() - firstPromptAt) / 60000
+      if (afterMin > BUDGET_MIN) {
+        failure = { reason: 'timeout', atMin: afterMin, detail: `not done in ${BUDGET_MIN} minutes`, stuck: lastStuck }
+        break
+      }
+      if (cancelled) continue
       if (!turn) continue
       const { decision } = turn.call
       log(`sim: ${decision.action} (${decision.why})`)
@@ -402,7 +441,7 @@ export async function run(options: RunOptions) {
         }
       } else if (decision.action === 'done') {
         if (!instance.busy() && !openQuestions(instance.doc(1, 'board')).length) {
-          simDone = { atMin: elapsedMin, why: decision.why }
+          simDone = { atMin: afterMin, why: decision.why }
           turn.record.applied = 'done'
           break
         }
@@ -421,10 +460,6 @@ export async function run(options: RunOptions) {
     const board = instance.doc<{ messages: Message[] }>(1, 'board') ?? { messages: [] }
     writeFileSync(join(out, 'transcripts', 'board.json'), JSON.stringify(board, null, 1))
     writeFileSync(join(out, 'transcripts', 'conversations.json'), JSON.stringify(conversations, null, 1))
-    const card: Scorecard = score(
-      { conversations, histories, board, ultimate: ultimateId, firstPromptAt },
-      FEATURE_WORDS,
-    )
     instance.close()
     instance = undefined
     await stopGroup(server)
@@ -433,6 +468,11 @@ export async function run(options: RunOptions) {
         mkdirSync(join(out, 'home'), { recursive: true })
         cpSync(join(home, name), join(out, 'home', name))
       }
+    const agents = startedAgents(join(home, 'state.sqlite'))
+    const card: Scorecard = score(
+      { conversations, histories, board, ultimate: ultimateId, firstPromptAt, agents },
+      FEATURE_WORDS,
+    )
 
     // The hidden acceptance spec, on a fresh checkout of the project's main.
     const remotes = git('remote')
@@ -462,7 +502,7 @@ export async function run(options: RunOptions) {
         if (await fetch(`http://127.0.0.1:${sitePort}/`).then((r) => r.ok, () => false)) break
         await new Promise((d) => setTimeout(d, 250))
       }
-      acceptance = await accept(`http://127.0.0.1:${sitePort}/`, join(out, 'screenshots'))
+      acceptance = await accept(`http://127.0.0.1:${sitePort}/`, join(out, 'screenshots'), cancel.signal)
     } finally {
       await stopGroup(site)
     }
@@ -475,6 +515,7 @@ export async function run(options: RunOptions) {
     const models = verifyModels(setup, card.modelsByRole)
     const simCost = simLog.reduce((n, s) => n + (s.costUsd ?? 0), 0)
     const allLanded = card.coordinators.length > 0 && card.coordinators.every((c) => c.landed)
+    if (cancelled) throw new Error('cancelled')
     const pass =
       !failure &&
       Object.values(models).every((m) => m.status !== 'mismatch') &&
@@ -515,7 +556,7 @@ export async function run(options: RunOptions) {
       reason: result.status,
       ...(firstPromptAt ? { atMin: (Date.now() - firstPromptAt) / 60000 } : {}),
       detail: String(error instanceof Error ? error.stack : error),
-      stuck: failure?.stuck ?? null,
+      stuck: failure?.stuck ?? lastStuck,
     }
     log(`error: ${String(error)}`)
   } finally {

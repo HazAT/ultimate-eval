@@ -75,12 +75,15 @@ test('score matches coordinators to features, counts workers, plans, landings an
     {
       ultimate: 2,
       firstPromptAt: 0,
+      // #12 shows a custom label; its definition is what counts. #13 has no record.
+      agents: { 12: 'worker' },
       conversations: [
         { id: 1, busy: false },
         { id: 2, busy: false, label: 'agent' },
         { id: 10, busy: false, title: 'Recipe pages alongside search', branchOf: { conversationId: 1, at: 3 } },
         { id: 11, busy: false, title: 'Favourites', branchOf: { conversationId: 1, at: 4 } },
-        { id: 12, busy: false, label: 'worker', parentConversationId: 10 },
+        { id: 12, busy: false, label: 'search implementation', parentConversationId: 10 },
+        { id: 13, busy: false, label: 'worker', parentConversationId: 11 },
         { id: 9, busy: false, label: 'lander' },
       ],
       histories: {
@@ -106,6 +109,7 @@ test('score matches coordinators to features, counts workers, plans, landings an
           }),
         ],
         12: [assistant(23, 12, 'openai-codex/sol', 0.5), { id: 24, kind: 'watchdog.failure', conversationId: 12 }],
+        13: [assistant(25, 13, 'x/other', 0)],
       },
       board: {
         messages: [
@@ -120,7 +124,7 @@ test('score matches coordinators to features, counts workers, plans, landings an
     [10, ['search'], true],
     [11, ['favourites'], false],
   ])
-  assert.deepEqual(card.workers, { total: 1, byCoordinator: { 10: 1 } })
+  assert.deepEqual(card.workers, { total: 2, byCoordinator: { 10: 1, 11: 1 } })
   assert.deepEqual(card.plans, { coordinatorsWithPlan: 1, epics: 1, tasks: 1 })
   assert.equal(card.landings.count, 1)
   assert.equal(card.timing.lastLandingMin, 6)
@@ -130,6 +134,7 @@ test('score matches coordinators to features, counts workers, plans, landings an
     ultimate: ['claude-code/opus'],
     coordinator: ['claude-code/opus'],
     worker: ['openai-codex/sol'],
+    unknown: ['x/other'],
   })
   assert.deepEqual(
     { asked: card.questions.asked, multi: card.questions.multi, wait: card.questions.waitSec },
@@ -149,6 +154,10 @@ test('each configured role is checked against what ran: ok, mismatch or not exer
   assert.deepEqual(
     Object.fromEntries(Object.entries(out).map(([k, v]) => [k, v.status])),
     { ultimate: 'ok', coordinator: 'mismatch', worker: 'ok', scout: 'not exercised' },
+  )
+  assert.equal(
+    verifyModels(setup, { unknown: ['x/y'] }).unknown?.status,
+    'mismatch',
   )
 })
 

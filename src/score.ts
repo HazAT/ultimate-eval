@@ -10,6 +10,11 @@ export type Collected = {
   board: { messages: Message[] }
   ultimate: number
   firstPromptAt: number
+  /**
+   * The agent definition each conversation was started as (`subagents.started`'s `agent`: `worker`, `scout`, `branch`
+   * for a coordinator, or an ad-hoc label), read from the stopped home. A display label can be anything; this is not.
+   */
+  agents?: Record<number, string>
 }
 
 type ModelUsage = {
@@ -75,13 +80,15 @@ export function featuresOf(text: string, words: Record<string, RegExp>) {
     .map(([name]) => name)
 }
 
-/** The role a conversation plays, from its label and its place in the tree. */
-export function roleOf(c: Summary, ultimate: number, coordinators: Set<number>) {
+/**
+ * The role a conversation plays: @ultimate, a coordinator (a branch), the lander, else the definition it was started
+ * as. Without that record a child is `unknown`, never guessed from its display label.
+ */
+export function roleOf(c: Summary, ultimate: number, coordinators: Set<number>, agent?: string) {
   if (c.id === ultimate) return 'ultimate'
   if (coordinators.has(c.id)) return 'coordinator'
   if (c.label === 'lander') return 'lander'
-  if (c.parentConversationId && coordinators.has(c.parentConversationId)) return c.label ?? 'child'
-  return c.label ?? 'other'
+  return agent ?? 'unknown'
 }
 
 export function score(data: Collected, featureWords: Record<string, RegExp>): Scorecard {
@@ -140,7 +147,7 @@ export function score(data: Collected, featureWords: Record<string, RegExp>): Sc
   let toolErrors = 0
   for (const [id, entries] of Object.entries(data.histories)) {
     const summary = byId.get(Number(id))
-    const role = summary ? roleOf(summary, data.ultimate, coordinatorIds) : 'other'
+    const role = summary ? roleOf(summary, data.ultimate, coordinatorIds, data.agents?.[Number(id)]) : 'unknown'
     for (const entry of entries) {
       if (entry.kind === 'watchdog.failure') failures++
       if (entry.kind.startsWith('watchdog.') && /retry|continu/i.test(entry.kind + textOf(entry))) retries++

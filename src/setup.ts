@@ -34,6 +34,9 @@ export type ModelCheck = { expected: string; ran: string[]; status: 'ok' | 'mism
  */
 export function verifyModels(setup: Setup, ranByRole: Record<string, string[]>) {
   const out: Record<string, ModelCheck> = {}
+  // A child whose definition we could not tell ran something we cannot check: say so rather than pass it.
+  if (ranByRole.unknown?.length)
+    out.unknown = { expected: '(no subagents.started record)', ran: ranByRole.unknown, status: 'mismatch' }
   for (const role of Object.keys(setup.roles)) {
     const want = expected(setup, role)!.model
     const ran = ranByRole[role] ?? []

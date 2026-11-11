@@ -62,9 +62,14 @@ function expect(condition: boolean, message: string) {
   if (!condition) throw new Error(message)
 }
 
-/** Run every check against the site served at `url`; screenshots go to `shots`. */
-export async function accept(url: string, shots: string): Promise<Acceptance> {
+/**
+ * Run every check against the site served at `url`; screenshots go to `shots`. An abort closes the browser at once,
+ * failing the checks still running, and rejects.
+ */
+export async function accept(url: string, shots: string, signal?: AbortSignal): Promise<Acceptance> {
   const browser = await chromium.launch()
+  const abort = () => void browser.close()
+  signal?.addEventListener('abort', abort, { once: true })
   const consoleErrors: string[] = []
   const screenshots: string[] = []
   const checks: Check[] = []
@@ -183,8 +188,10 @@ export async function accept(url: string, shots: string): Promise<Acceptance> {
       expect(one.includes('1') && !one.includes('2'), `unmarking left: ${one.join(',')}`)
     })
   } finally {
+    signal?.removeEventListener('abort', abort)
     await browser.close()
   }
+  if (signal?.aborted) throw new Error('cancelled')
   checks.push({
     name: 'no console errors',
     pass: consoleErrors.length === 0,

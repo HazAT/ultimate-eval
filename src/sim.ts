@@ -97,7 +97,7 @@ export function turnPrompt(input: {
 }
 
 /** Ask the simulated user once. `cwd` is a unique per-run folder, so its Claude Code project path is known. */
-export function decide(prompt: string, cwd: string): Promise<SimCall> {
+export function decide(prompt: string, cwd: string, signal?: AbortSignal): Promise<SimCall> {
   mkdirSync(cwd, { recursive: true })
   const started = Date.now()
   return new Promise((resolve, reject) => {
@@ -127,11 +127,14 @@ export function decide(prompt: string, cwd: string): Promise<SimCall> {
     let out = ''
     let err = ''
     const timer = setTimeout(() => child.kill('SIGTERM'), 180_000)
+    const stop = () => child.kill('SIGTERM')
+    signal?.addEventListener('abort', stop, { once: true })
     child.stdout.on('data', (d) => (out += d))
     child.stderr.on('data', (d) => (err += d))
     child.on('error', reject)
     child.on('close', (code) => {
       clearTimeout(timer)
+      signal?.removeEventListener('abort', stop)
       try {
         const result = JSON.parse(out)
         if (result.is_error || !result.structured_output)
