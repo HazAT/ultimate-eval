@@ -4,7 +4,12 @@ import { applyOps, openQuestions } from '../src/api.ts'
 import type { Entry, Message } from '../src/api.ts'
 import { shapeAnswers } from '../src/sim.ts'
 import { score } from '../src/score.ts'
-import { median, table } from '../src/report.ts'
+import { groups, median, table } from '../src/report.ts'
+import { coordinatorsOf, writeLive } from '../src/live.ts'
+import type { Live } from '../src/live.ts'
+import { existsSync, mkdtempSync, readFileSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
 import type { RunResult } from '../src/report.ts'
 
 test('applyOps follows the stream: replace, set, append, splice, delete', () => {
@@ -203,4 +208,35 @@ test('report groups by commit, setup and scenario with passes/N and medians', ()
   assert.match(row, /10\.00/)
   assert.match(row, /search 3\/3, favourites 2\/3/)
   assert.match(row, /timeout/)
+  const [a, b] = groups([r(true, 20, 10), r(false, 30, 12), r(true, 10, 5, 'bbbbbbbbbbbb')])
+  assert.deepEqual([a!.passes, a!.runs.length, a!.medianMin, a!.medianCost, a!.features], [1, 2, 25, 11, { search: 2, favourites: 1 }])
+  assert.equal(a!.failures[0]!.status, 'timeout')
+  assert.equal(b!.commit, 'bbbbbbbbbbbb')
+})
+
+test('live.json is replaced whole, keeps the last turns, and knows which coordinators landed', () => {
+  const root = [
+    { id: 1, kind: 'lineage.branched', data: { branch: 7, intent: 'Search' } },
+    { id: 2, kind: 'lineage.branched', data: { branch: 9, intent: 'Favourites' } },
+    { id: 3, kind: 'lineage.note', data: { from: 9 } },
+    { id: 4, kind: 'lineage.note', data: { from: 7, source: 'lander', sha: 'abc' } },
+  ] as Entry[]
+  const coordinators = coordinatorsOf(root, [{ id: 7, title: 'Add search', busy: false }])
+  assert.deepEqual(coordinators, [
+    { id: 7, title: 'Add search', intent: 'Search', landed: true },
+    { id: 9, title: undefined, intent: 'Favourites', landed: false },
+  ])
+  const path = join(mkdtempSync(join(tmpdir(), 'ue-live-')), 'live.json')
+  const live: Live = {
+    id: 'x', pid: 1, phase: 'running', commit: 'c', setup: 's', scenario: 'r', repeat: { index: 2, total: 3 },
+    launchedAt: 0, budgetMin: 30, updatedAt: 0, busy: [], coordinators, open: 0,
+    said: Array.from({ length: 12 }, (_, i) => ({ at: i, who: 'you' as const, text: `turn ${i} ${'x'.repeat(900)}` })),
+  }
+  writeLive(path, live)
+  const read = JSON.parse(readFileSync(path, 'utf8')) as Live
+  assert.equal(read.said.length, 8)
+  assert.match(read.said[0]!.text, /^turn 4 /)
+  assert.equal(read.said[0]!.text.length, 600)
+  assert.equal(live.said.length, 12)
+  assert.equal(existsSync(`${path}.tmp`), false)
 })

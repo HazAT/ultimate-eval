@@ -24,14 +24,18 @@ const command = positionals[0]
 if (command === 'run') {
   const repeat = Number(values.repeat)
   if (!Number.isInteger(repeat) || repeat < 1) throw new Error('--repeat must be a positive integer')
-  for (let i = 0; i < repeat; i++)
-    await run({
+  for (let i = 0; i < repeat; i++) {
+    const result = await run({
       repo: resolve(values.repo),
       commit: values.commit,
       setupPath: resolve(ROOT, values.setup),
       scenario: values.scenario,
       keep: values.keep,
+      repeat: { index: i + 1, total: repeat },
     })
+    // A cancel (Ctrl+C, TERM, the Bench surface's Cancel) stops the remaining repeats too.
+    if (result.status === 'cancelled') break
+  }
   console.log(`\n${table(readRuns(join(ROOT, 'runs')))}`)
 } else if (command === 'report') console.log(table(readRuns(join(ROOT, 'runs'))))
 else {

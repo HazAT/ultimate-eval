@@ -17,6 +17,8 @@ import { Instance, openQuestions } from './api.ts'
 import type { Message } from './api.ts'
 import { decide, shapeAnswers, SIM_EFFORT, SIM_MODEL, SIM_PROMPT_SHA, turnPrompt } from './sim.ts'
 import type { Card, Decision, Said } from './sim.ts'
+import { coordinatorsOf, writeLive } from './live.ts'
+import type { Live, Phase } from './live.ts'
 import { answerText, score } from './score.ts'
 import type { Scorecard } from './score.ts'
 import { readSetup, seedUserHome, verifyModels } from './setup.ts'
@@ -32,6 +34,8 @@ export type RunOptions = {
   setupPath: string
   scenario: string
   keep?: boolean
+  /** This run's place in a `--repeat`, for the live view. */
+  repeat?: { index: number; total: number }
   log?: (line: string) => void
 }
 
@@ -178,6 +182,34 @@ export async function run(options: RunOptions) {
   let lastStuck: unknown = null
   const result: Record<string, unknown> = { id, pins, startedAt: new Date(startedAt).toISOString() }
 
+  // Where the run stands, for the Bench surface: replaced at each phase and tick, removed with the result.
+  const livePath = join(out, 'live.json')
+  const live: Live = {
+    id,
+    pid: process.pid,
+    phase: 'preparing',
+    commit,
+    setup: setup.name,
+    scenario: options.scenario,
+    repeat: options.repeat ?? { index: 1, total: 1 },
+    launchedAt,
+    budgetMin: BUDGET_MIN,
+    updatedAt: Date.now(),
+    said: [],
+    busy: [],
+    coordinators: [],
+    open: 0,
+  }
+  const publish = (update: Partial<Live> & { phase?: Phase } = {}) => {
+    Object.assign(live, update, { updatedAt: Date.now() })
+    try {
+      writeLive(livePath, live)
+    } catch (e) {
+      log(`writing live.json: ${e}`)
+    }
+  }
+  publish()
+
   // Ctrl+C or a TERM ends the run as a failure: the loop sees `cancelled`, the finally block cleans up. A second
   // signal kills the groups at once and leaves.
   let cancelled = false
@@ -206,6 +238,7 @@ export async function run(options: RunOptions) {
     sh('git', ['clone', '-q', '--shared', '--no-checkout', options.repo, clone], '/')
     sh('git', ['checkout', '-q', '--detach', commit], clone)
     sh('git', ['remote', 'remove', 'origin'], clone)
+    publish({ phase: 'installing' })
     log('installing packages')
     sh('pnpm', ['install', '--frozen-lockfile', '--prefer-offline'], clone, cleanEnv())
     // The card at this commit sends a multi answer as a list (ce22290 and later) or joined with ", " (before).
@@ -228,6 +261,7 @@ export async function run(options: RunOptions) {
 
     const port = await freePort()
     const base = `http://127.0.0.1:${port}`
+    publish({ phase: 'starting', url: base })
     log(`starting ${base}`)
     if (cancelled) throw new Error('cancelled')
     server = spawn(process.execPath, ['bin/ultimate.ts', project, '--port', String(port), '--no-open'], {
@@ -253,6 +287,7 @@ export async function run(options: RunOptions) {
       await new Promise((d) => setTimeout(d, 250))
     }
 
+    publish({ phase: 'opening' })
     instance = new Instance(base)
     await instance.watch(1, ['board'])
     await instance.open()
@@ -320,6 +355,7 @@ export async function run(options: RunOptions) {
     said.push({ at: firstPromptAt, who: 'you', text: opening.call.decision.text })
     opening.record.applied = 'sent'
     log(`you: ${opening.call.decision.text}`)
+    publish({ phase: 'running', firstPromptAt, ultimate: ultimateId, said })
 
     for (;;) {
       await instance.changed(15_000)
@@ -379,6 +415,13 @@ export async function run(options: RunOptions) {
         lastSaid: said.at(-1),
         lastProgressMin: Math.round(((now - Math.max(instance.lastProgress, lastNews)) / 60000) * 10) / 10,
       }
+      const root = await instance.history(1).catch(() => undefined)
+      publish({
+        said,
+        busy: (lastStuck as { busy: Live['busy'] }).busy,
+        open: (lastStuck as { open: unknown[] }).open.length,
+        ...(root ? { coordinators: coordinatorsOf(root, instance.conversations) } : {}),
+      })
       if (elapsedMin > BUDGET_MIN) {
         failure = { reason: 'timeout', atMin: elapsedMin, detail: `not done in ${BUDGET_MIN} minutes`, stuck: lastStuck }
         break
@@ -455,6 +498,7 @@ export async function run(options: RunOptions) {
     }
 
     if (cancelled) throw new Error('cancelled')
+    publish({ phase: 'collecting', busy: [] })
     // Collect everything over the API before the server stops; each request is bounded, a dead core yields none.
     const conversations = instance.conversations
     const histories: Record<number, Awaited<ReturnType<Instance['history']>>> = {}
@@ -480,6 +524,7 @@ export async function run(options: RunOptions) {
     )
 
     // The hidden acceptance spec, on a fresh checkout of the project's main.
+    publish({ phase: 'accepting', coordinators: coordinatorsOf(histories[1] ?? [], conversations) })
     const remotes = git('remote')
     const checkout = join(tmp, 'accept')
     sh('git', ['clone', '-q', project, checkout], '/')
@@ -576,6 +621,7 @@ export async function run(options: RunOptions) {
       result.simCostUsd = Math.round(simLog.reduce((n, s) => n + (s.costUsd ?? 0), 0) * 100) / 100
       result.finishedAt = new Date().toISOString()
       writeFileSync(join(out, 'result.json'), JSON.stringify(result, null, 2))
+      rmSync(livePath, { force: true })
     } catch (e) {
       log(`writing results: ${e}`)
     }

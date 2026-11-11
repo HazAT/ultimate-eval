@@ -27,26 +27,59 @@ export function readRuns(dir: string): RunResult[] {
     .map((name) => JSON.parse(readFileSync(join(dir, name, 'result.json'), 'utf8')) as RunResult)
 }
 
-export function table(runs: RunResult[]) {
-  const groups = new Map<string, RunResult[]>()
+/** One row of the matrix: the runs of one commit × setup × scenario. */
+export type Group = {
+  commit: string
+  setup: string
+  scenario: string
+  scenarioSha: string
+  runs: RunResult[]
+  passes: number
+  medianMin?: number
+  medianCost?: number
+  /** Each feature's passing runs. */
+  features: Record<string, number>
+  failures: { id: string; status: string }[]
+}
+
+/** The runs grouped by commit × setup × scenario, in the order first seen. */
+export function groups(runs: RunResult[]): Group[] {
+  const byKey = new Map<string, RunResult[]>()
   // A run we stopped ourselves (Ctrl+C) says nothing about Ultimate: it stays in runs/ but out of the matrix.
   for (const r of runs.filter((r) => r.status !== 'cancelled')) {
-    const key = `${r.pins.ultimateCommit.slice(0, 10)}  ${r.pins.setup}  ${r.pins.scenario}@${r.pins.scenarioSha.slice(0, 6)}`
-    groups.set(key, [...(groups.get(key) ?? []), r])
+    const key = `${r.pins.ultimateCommit}\0${r.pins.setup}\0${r.pins.scenario}\0${r.pins.scenarioSha}`
+    byKey.set(key, [...(byKey.get(key) ?? []), r])
   }
+  return [...byKey.values()].map((list) => {
+    const { ultimateCommit, setup, scenario, scenarioSha } = list[0]!.pins
+    const features: Record<string, number> = {}
+    for (const r of list) for (const [f, ok] of Object.entries(r.features ?? {})) if (ok) features[f] = (features[f] ?? 0) + 1
+    return {
+      commit: ultimateCommit,
+      setup,
+      scenario,
+      scenarioSha,
+      runs: list,
+      passes: list.filter((r) => r.pass).length,
+      medianMin: median(list.flatMap((r) => (r.minutes === undefined ? [] : [r.minutes]))),
+      medianCost: median(list.map((r) => (r.scorecard?.usage.totalCostUsd ?? 0) + (r.sim?.costUsd ?? 0))),
+      features,
+      failures: list.filter((r) => !r.pass).map((r) => ({ id: r.id, status: r.status })),
+    }
+  })
+}
+
+export function table(runs: RunResult[]) {
   const rows = [['commit  setup  scenario', 'pass/N', 'median min', 'median $', 'features passing', 'failures']]
-  for (const [key, list] of groups) {
-    const features = new Map<string, number>()
-    for (const r of list) for (const [f, ok] of Object.entries(r.features ?? {})) if (ok) features.set(f, (features.get(f) ?? 0) + 1)
-    const cost = list.map((r) => (r.scorecard?.usage.totalCostUsd ?? 0) + (r.sim?.costUsd ?? 0))
-    const min = median(list.flatMap((r) => (r.minutes === undefined ? [] : [r.minutes])))
+  for (const g of groups(runs)) {
+    const n = g.runs.length
     rows.push([
-      key,
-      `${list.filter((r) => r.pass).length}/${list.length}`,
-      min === undefined ? '-' : min.toFixed(1),
-      (median(cost) ?? 0).toFixed(2),
-      [...features].map(([f, n]) => `${f} ${n}/${list.length}`).join(', ') || '-',
-      list.filter((r) => !r.pass).map((r) => r.status).join(', ') || '-',
+      `${g.commit.slice(0, 10)}  ${g.setup}  ${g.scenario}@${g.scenarioSha.slice(0, 6)}`,
+      `${g.passes}/${n}`,
+      g.medianMin === undefined ? '-' : g.medianMin.toFixed(1),
+      (g.medianCost ?? 0).toFixed(2),
+      Object.entries(g.features).map(([f, k]) => `${f} ${k}/${n}`).join(', ') || '-',
+      g.failures.map((f) => f.status).join(', ') || '-',
     ])
   }
   const widths = rows[0]!.map((_, i) => Math.max(...rows.map((r) => r[i]!.length)))
