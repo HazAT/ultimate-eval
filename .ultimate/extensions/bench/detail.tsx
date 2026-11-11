@@ -291,10 +291,12 @@ function Scorecard({ r }: { r: Result }) {
               {Object.entries(r.pins.roles).map(([role, family]) => {
                 const f = r.pins.families?.[family]
                 const m = r.models?.[role]
+                // Results before the agent-profile check wrote `ok`; later ones write `status`.
+                const status = m?.status ?? (m?.ok === true ? 'ok' : m?.ok === false ? 'mismatch' : undefined)
                 return (
                   <li className="grid min-w-0 grid-cols-[0.75rem_6rem_minmax(0,1fr)] gap-x-2" key={role}>
                     <span className="pt-1">
-                      <Pass ok={m?.ok} />
+                      <Pass ok={status === 'ok' ? true : status === 'mismatch' ? false : undefined} />
                     </span>
                     <span className="text-muted-foreground">{role}</span>
                     <span className="min-w-0">
@@ -304,9 +306,9 @@ function Scorecard({ r }: { r: Result }) {
                       <span className="block text-[11px] text-muted-foreground/70">
                         {family}
                         {f?.thinking && ` · ${f.thinking}`}
-                        {m && m.ok === undefined && ' · not exercised'}
+                        {status && status !== 'ok' && status !== 'mismatch' && ` · ${status}`}
                       </span>
-                      {m?.ok === false && (
+                      {status === 'mismatch' && m && (
                         <span className="block text-[11px] text-error">ran {m.ran.join(', ')}</span>
                       )}
                     </span>
@@ -499,4 +501,3 @@ function Tests({ r, text }: { r: Result; text?: string }) {
     </>
   )
 }
-

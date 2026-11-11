@@ -106,7 +106,10 @@ export type Result = {
   acceptance?: { name: string; pass: boolean; detail?: string }[]
   noRemote?: boolean
   mainLog?: string[]
-  models?: Record<string, { expected: string; ran: string[]; ok?: boolean; unverified?: string[] }>
+  models?: Record<
+    string,
+    { expected: string; ran: string[]; status?: 'ok' | 'mismatch' | 'not exercised' | 'unverified'; ok?: boolean }
+  >
   sim?: { calls: number; costUsd: number; improvised: number; nudges: number; refusedAnswers: number }
   simCostUsd?: number
   scorecard?: {

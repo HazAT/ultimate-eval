@@ -200,7 +200,9 @@ export async function run(options: RunOptions) {
     coordinators: [],
     open: 0,
   }
+  let finished = false
   const publish = (update: Partial<Live> & { phase?: Phase } = {}) => {
+    if (finished) return // a late side read must not bring back a removed live.json
     Object.assign(live, update, { updatedAt: Date.now() })
     try {
       writeLive(livePath, live)
@@ -304,6 +306,7 @@ export async function run(options: RunOptions) {
     let lastNews = Date.now()
     let calls = 0
     let nudges = 0
+    let refreshing: Promise<void> | undefined
 
     const ask = async (opening: boolean) => {
       const board = instance!.doc<{ messages: Message[] }>(1, 'board')
@@ -415,13 +418,20 @@ export async function run(options: RunOptions) {
         lastSaid: said.at(-1),
         lastProgressMin: Math.round(((now - Math.max(instance.lastProgress, lastNews)) / 60000) * 10) / 10,
       }
-      const root = await instance.history(1).catch(() => undefined)
       publish({
         said,
         busy: (lastStuck as { busy: Live['busy'] }).busy,
         open: (lastStuck as { open: unknown[] }).open.length,
-        ...(root ? { coordinators: coordinatorsOf(root, instance.conversations) } : {}),
       })
+      // The coordinators come from the root's history, read on the side: the watchdog never waits for the live view.
+      if (!refreshing) {
+        const watched = instance
+        refreshing = watched
+          .history(1)
+          .then((root) => publish({ coordinators: coordinatorsOf(root, watched.conversations) }))
+          .catch(() => {})
+          .finally(() => (refreshing = undefined))
+      }
       if (elapsedMin > BUDGET_MIN) {
         failure = { reason: 'timeout', atMin: elapsedMin, detail: `not done in ${BUDGET_MIN} minutes`, stuck: lastStuck }
         break
@@ -621,6 +631,7 @@ export async function run(options: RunOptions) {
       result.simCostUsd = Math.round(simLog.reduce((n, s) => n + (s.costUsd ?? 0), 0) * 100) / 100
       result.finishedAt = new Date().toISOString()
       writeFileSync(join(out, 'result.json'), JSON.stringify(result, null, 2))
+      finished = true
       rmSync(livePath, { force: true })
     } catch (e) {
       log(`writing results: ${e}`)

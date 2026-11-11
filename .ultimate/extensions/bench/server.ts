@@ -1,7 +1,7 @@
 // bench's server facet: read-only views over runs/ for the Bench surface (the matrix, one run, a transcript page, a
 // screenshot, the run in progress) and `cancel`, which only the UI may call.
-import { existsSync, readdirSync, readFileSync, statSync } from 'node:fs'
-import { join } from 'node:path'
+import { existsSync, readdirSync, readFileSync, readlinkSync, statSync } from 'node:fs'
+import { basename, join, resolve } from 'node:path'
 import { pathToFileURL } from 'node:url'
 import { defineExtension } from '@earendil-works/pi-durable'
 
@@ -32,8 +32,11 @@ const groups = async (ctx: Ctx, runs: RunResult[]) => {
 }
 
 const runsDir = (ctx: Ctx) => join(ctx.host.projectRoot, 'runs')
+/** No file larger than this is read: what run.ts writes stays far below it (transcripts are well under 1 MB). */
+const MAX_FILE = 16 * 1024 * 1024
 const readJson = <T>(path: string): T | undefined => {
   try {
+    if (statSync(path).size > MAX_FILE) return undefined
     return JSON.parse(readFileSync(path, 'utf8')) as T
   } catch {
     return undefined
@@ -50,12 +53,24 @@ const fileName = (value: unknown, pattern: RegExp, what: string) => {
 }
 const arg = (args: unknown, key: string) => (args && typeof args === 'object' ? (args as Record<string, unknown>)[key] : undefined)
 
-/** Is `pid` an eval runner (`node src/cli.ts run`) still alive? Guards cancel against a reused pid. */
-const isRunner = (pid: unknown) => {
+/**
+ * Is `pid` this project's eval runner, still alive? `pnpm eval run` execs `node src/cli.ts run …` in the project root:
+ * the executable is node, its script is this project's src/cli.ts, the subcommand right after it is `run`. Guards cancel
+ * against a reused pid and against any other process that merely mentions those words.
+ */
+const isRunner = (pid: unknown, ctx: Ctx) => {
   if (typeof pid !== 'number' || !Number.isInteger(pid) || pid <= 1) return false
   try {
-    const cmdline = readFileSync(`/proc/${pid}/cmdline`, 'utf8').split('\0')
-    return cmdline.some((a) => a.endsWith('src/cli.ts')) && cmdline.includes('run')
+    const exe = readlinkSync(`/proc/${pid}/exe`)
+    const cwd = readlinkSync(`/proc/${pid}/cwd`)
+    const argv = readFileSync(`/proc/${pid}/cmdline`, 'utf8').split('\0')
+    const script = argv.findIndex((a, i) => i > 0 && !a.startsWith('-'))
+    return (
+      basename(exe) === 'node' &&
+      script > 0 &&
+      resolve(cwd, argv[script]!) === join(ctx.host.projectRoot, 'src/cli.ts') &&
+      argv[script + 1] === 'run'
+    )
   } catch {
     return false
   }
@@ -77,7 +92,7 @@ function inProgress(ctx: Ctx): InProgress[] {
     .filter((name) => /^\d{8}t\d{4}-/.test(name) && !existsSync(join(dir, name, 'result.json')))
     .flatMap((id): InProgress[] => {
       const live = readJson<Live>(join(dir, id, 'live.json'))
-      if (live) return isRunner(live.pid) ? [{ ...live, kind: 'running' }] : []
+      if (live) return isRunner(live.pid, ctx) ? [{ ...live, kind: 'running' }] : []
       if (!existsSync(`/tmp/ue-run-${id}`)) return []
       const stat = statSync(join(dir, id))
       return [{ kind: 'legacy', id, commit: id.split('-')[1], launchedAt: stat.birthtimeMs || stat.mtimeMs }]
@@ -150,11 +165,14 @@ export const actions = {
       join(dir, 'transcripts', 'conversations.json'),
     ) ?? []
     const list = (sub: string, re: RegExp) => (existsSync(join(dir, sub)) ? readdirSync(join(dir, sub)).filter((n) => re.test(n)).sort() : [])
-    const projectTests = existsSync(join(dir, 'project-tests.txt')) ? readFileSync(join(dir, 'project-tests.txt'), 'utf8').slice(-20_000) : undefined
+    const testsPath = join(dir, 'project-tests.txt')
+    const projectTests =
+      existsSync(testsPath) && statSync(testsPath).size <= MAX_FILE ? readFileSync(testsPath, 'utf8').slice(-20_000) : undefined
     return {
       result,
       // Without the prompts: they repeat the scenario every turn.
-      sim: sim && { said: sim.said, calls: sim.calls.map(({ at, decision, costUsd, ms, error, applied }) => ({ at, decision, costUsd, ms, error, applied })) },
+      // run.ts stops at 60 simulated-user calls, so these stay short; the slices only guard a hand-edited file.
+      sim: sim && { said: sim.said.slice(-200), calls: sim.calls.slice(-100).map(({ at, decision, costUsd, ms, error, applied }) => ({ at, decision, costUsd, ms, error, applied })) },
       conversations,
       transcripts: list('transcripts', /^\d+\.json$/).map((n) => Number(n.slice(0, -5))),
       screenshots: list('screenshots', /^[\w-]+\.png$/),
@@ -181,7 +199,9 @@ export const actions = {
           ? content.flatMap((c: { type: string; text?: string }) => (c.type === 'text' && c.text ? [c.text] : [])).join('\n')
           : ''
     const limit = 200
-    const end = Math.min(Number(arg(args, 'before') ?? entries.length) || entries.length, entries.length)
+    const before = arg(args, 'before') ?? entries.length
+    if (typeof before !== 'number' || !Number.isInteger(before) || before < 0) throw new Error('Expected before: an entry index')
+    const end = Math.min(before, entries.length)
     const start = Math.max(0, end - limit)
     const page = entries.slice(start, end).map((e) => {
       const m = e.model?.[0]
@@ -212,7 +232,10 @@ export const actions = {
   async screenshot(args: unknown, ctx: Ctx) {
     const id = runId(arg(args, 'id'))
     const name = fileName(arg(args, 'name'), /^[\w-]+\.png$/, 'a screenshot name')
-    return `data:image/png;base64,${readFileSync(join(runsDir(ctx), id, 'screenshots', name)).toString('base64')}`
+    const path = join(runsDir(ctx), id, 'screenshots', name)
+    // Playwright's page screenshots are tens of KB; refuse anything that is not one.
+    if (statSync(path).size > 4 * 1024 * 1024) throw new Error(`${name} is larger than 4 MB`)
+    return `data:image/png;base64,${readFileSync(path).toString('base64')}`
   },
 
   /** Stop a run in progress: SIGTERM to its runner, which records it as cancelled and stops the remaining repeats. */
@@ -222,7 +245,7 @@ export const actions = {
     if (existsSync(join(dir, 'result.json'))) throw new Error(`Run ${id} has already finished`)
     const live = readJson<Live>(join(dir, 'live.json'))
     if (!live) throw new Error(`Run ${id} has no live.json; stop it from its terminal`)
-    if (!isRunner(live.pid)) throw new Error(`Run ${id}'s runner (pid ${live.pid}) is not running`)
+    if (!isRunner(live.pid, ctx)) throw new Error(`Run ${id}'s runner (pid ${live.pid}) is not running`)
     process.kill(live.pid, 'SIGTERM')
     return { cancelled: id, pid: live.pid }
   },
