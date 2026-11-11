@@ -48,7 +48,9 @@ Runs go one after another; each spends real subscription quota (estimate: $3–1
 - `result.json`: pins (`ultimateCommit`, `scenarioSha`, `setup`/`setupSha`, families, roles, sim model and
   `simPromptSha`), `pass`, `status`, `failure`, `minutes`, `features`, `acceptance`, `projectTests`, `noRemote`,
   `models` (each configured role: `ok`, `mismatch` or `not exercised`, from what its conversations' assistant
-  entries ran; a mismatch fails the run), `answerShape`, `sim` (calls, cost,
+  entries ran, with each conversation's role taken from its `ultimate.agent-profile` definition in the stopped home,
+  never from its display label; a mismatch fails the run; agents made on the fly have no definition and are listed as
+  `unverified`), `answerShape`, `sim` (calls, cost,
   improvised answers, nudges, refused answers), and the `scorecard`: coordinators matched to features, workers per
   coordinator, plans, landings (and that nothing was pushed), timing, tokens and cost per model, cache hit rate,
   questions asked with their kinds and wait, watchdog failures, tool errors.

@@ -11,8 +11,8 @@ export type Collected = {
   ultimate: number
   firstPromptAt: number
   /**
-   * The agent definition each conversation was started as (`subagents.started`'s `agent`: `worker`, `scout`, `branch`
-   * for a coordinator, or an ad-hoc label), read from the stopped home. A display label can be anything; this is not.
+   * The agent definition each conversation was configured from (its `ultimate.agent-profile`), read from the stopped
+   * home. A display label can be anything; this cannot. Ad-hoc agents have none.
    */
   agents?: Record<number, string>
 }
@@ -81,8 +81,8 @@ export function featuresOf(text: string, words: Record<string, RegExp>) {
 }
 
 /**
- * The role a conversation plays: @ultimate, a coordinator (a branch), the lander, else the definition it was started
- * as. Without that record a child is `unknown`, never guessed from its display label.
+ * The role a conversation plays: @ultimate, a coordinator (a branch), the lander, else the definition it was configured
+ * from. Without one (an ad-hoc agent) it is `unknown`, never guessed from its display label.
  */
 export function roleOf(c: Summary, ultimate: number, coordinators: Set<number>, agent?: string) {
   if (c.id === ultimate) return 'ultimate'

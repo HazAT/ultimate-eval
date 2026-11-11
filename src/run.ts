@@ -98,20 +98,25 @@ export function folderSha(dir: string) {
 }
 
 /**
- * The definition each conversation was started as, from the `subagents.started` events in a stopped home's database:
- * read only once the server is down, so no storage internals are touched while it runs.
+ * The definition each conversation was configured from: its `ultimate.agent-profile` document (subagents/api.ts), whose
+ * `definition` is the real definition name, never a display label; an agent made on the fly has none. Read from a
+ * stopped home's database only, so no storage internals are touched while the server runs. The newest revision wins.
  */
-export function startedAgents(database: string): Record<number, string> {
+export function agentProfiles(database: string): Record<number, string> {
   if (!existsSync(database)) return {}
   const db = new DatabaseSync(database, { readOnly: true })
   try {
     const out: Record<number, string> = {}
-    for (const row of db
-      .prepare("select record from entries where record like '%\"event.subagents.started\"%'")
-      .all() as { record: string }[]) {
-      const entry = JSON.parse(row.record) as { kind: string; data?: { data?: { id?: number; agent?: string } } }
-      const started = entry.data?.data
-      if (entry.kind === 'event.subagents.started' && started?.id && started.agent) out[started.id] = started.agent
+    const rows = db
+      .prepare(
+        `select d.owner_id as owner, r.content as content from documents d join document_revisions r on r.document_id = d.id
+         where d.kind = '"ultimate.agent-profile"' and d.scope_kind = 'conversation' and r.kind = 'base' order by r.seq`,
+      )
+      .all() as { owner: number; content: string }[]
+    for (const row of rows) {
+      const profile = JSON.parse(row.content) as { definition?: string }
+      if (profile.definition) out[row.owner] = profile.definition
+      else delete out[row.owner]
     }
     return out
   } finally {
@@ -468,7 +473,7 @@ export async function run(options: RunOptions) {
         mkdirSync(join(out, 'home'), { recursive: true })
         cpSync(join(home, name), join(out, 'home', name))
       }
-    const agents = startedAgents(join(home, 'state.sqlite'))
+    const agents = agentProfiles(join(home, 'state.sqlite'))
     const card: Scorecard = score(
       { conversations, histories, board, ultimate: ultimateId, firstPromptAt, agents },
       FEATURE_WORDS,

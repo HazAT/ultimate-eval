@@ -26,7 +26,11 @@ export function readSetup(path: string): Setup {
 /** The model and thinking a role is expected to run on. */
 export const expected = (setup: Setup, role: string) => setup.families[setup.roles[role] ?? 'default']
 
-export type ModelCheck = { expected: string; ran: string[]; status: 'ok' | 'mismatch' | 'not exercised' }
+export type ModelCheck = {
+  expected: string
+  ran: string[]
+  status: 'ok' | 'mismatch' | 'not exercised' | 'unverified'
+}
 
 /**
  * Each configured role against the models its conversations actually ran (from their assistant entries): `ok`, a
@@ -34,9 +38,9 @@ export type ModelCheck = { expected: string; ran: string[]; status: 'ok' | 'mism
  */
 export function verifyModels(setup: Setup, ranByRole: Record<string, string[]>) {
   const out: Record<string, ModelCheck> = {}
-  // A child whose definition we could not tell ran something we cannot check: say so rather than pass it.
+  // Agents made on the fly have no definition, so no role to hold them to: listed as unverified, never as ok.
   if (ranByRole.unknown?.length)
-    out.unknown = { expected: '(no subagents.started record)', ran: ranByRole.unknown, status: 'mismatch' }
+    out.unknown = { expected: '(no agent definition)', ran: ranByRole.unknown, status: 'unverified' }
   for (const role of Object.keys(setup.roles)) {
     const want = expected(setup, role)!.model
     const ran = ranByRole[role] ?? []

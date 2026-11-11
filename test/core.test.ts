@@ -157,8 +157,24 @@ test('each configured role is checked against what ran: ok, mismatch or not exer
   )
   assert.equal(
     verifyModels(setup, { unknown: ['x/y'] }).unknown?.status,
-    'mismatch',
+    'unverified',
   )
+})
+
+test('roles come from agent-profile documents of the stopped home, not display labels', async () => {
+  const { DatabaseSync } = await import('node:sqlite')
+  const { mkdtempSync } = await import('node:fs')
+  const { agentProfiles } = await import('../src/run.ts')
+  const path = `${mkdtempSync('/tmp/ue-test-')}/state.sqlite`
+  const db = new DatabaseSync(path)
+  db.exec(`create table documents (id integer primary key, kind text, scope_kind text, owner_id integer);
+    create table document_revisions (document_id integer, seq integer, kind text, content text);
+    insert into documents values (1, '"ultimate.agent-profile"', 'conversation', 12), (2, '"ultimate.agent-profile"', 'conversation', 14),
+      (3, '"pi.agent"', 'conversation', 12);
+    insert into document_revisions values (1, 5, 'base', '{"definition":"worker"}'), (2, 6, 'base', '{"adhoc":true}'),
+      (3, 7, 'base', '{"definition":"nope"}');`)
+  db.close()
+  assert.deepEqual(agentProfiles(path), { 12: 'worker' })
 })
 
 test('report groups by commit, setup and scenario with passes/N and medians', () => {
