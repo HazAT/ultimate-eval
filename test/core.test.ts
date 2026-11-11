@@ -87,11 +87,12 @@ test('score matches coordinators to features, counts workers, plans, landings an
         1: [
           { id: 3, kind: 'lineage.branched', conversationId: 1, data: { branch: 10, intent: 'Search' } },
           { id: 4, kind: 'lineage.branched', conversationId: 1, data: { branch: 11, intent: 'Favourites' } },
+          { id: 6, kind: 'lineage.note', conversationId: 1, data: { from: 11, text: 'still investigating' } },
           {
             id: 5,
             kind: 'lineage.note',
             conversationId: 1,
-            data: { from: 10, sha: 'abc' },
+            data: { from: 10, sha: 'abc', source: 'lander' },
             model: [{ role: 'user', content: 'Landed', timestamp: 6 * 60000 }],
           },
         ],
@@ -137,6 +138,20 @@ test('score matches coordinators to features, counts workers, plans, landings an
   assert.equal(card.watchdog.failures, 1)
 })
 
+test('each configured role is checked against what ran: ok, mismatch or not exercised', async () => {
+  const { verifyModels } = await import('../src/setup.ts')
+  const setup = {
+    name: 't',
+    families: { default: { model: 'a/opus' }, fast: { model: 'b/sol' }, tiny: { model: 'b/luna' } },
+    roles: { ultimate: 'default', coordinator: 'default', worker: 'fast', scout: 'tiny' },
+  }
+  const out = verifyModels(setup, { ultimate: ['a/opus'], coordinator: ['a/opus', 'b/sol'], worker: ['b/sol'] })
+  assert.deepEqual(
+    Object.fromEntries(Object.entries(out).map(([k, v]) => [k, v.status])),
+    { ultimate: 'ok', coordinator: 'mismatch', worker: 'ok', scout: 'not exercised' },
+  )
+})
+
 test('report groups by commit, setup and scenario with passes/N and medians', () => {
   assert.equal(median([3, 1, 2]), 2)
   assert.equal(median([1, 2, 3, 4]), 2.5)
@@ -150,7 +165,13 @@ test('report groups by commit, setup and scenario with passes/N and medians', ()
     scorecard: { usage: { totalCostUsd: cost }, coordinators: [], workers: { total: 0 } },
     sim: { costUsd: 0 },
   })
-  const out = table([r(true, 20, 10), r(false, 30, 12), r(true, 24, 8), r(true, 10, 5, 'bbbbbbbbbbbb')])
+  const out = table([
+    r(true, 20, 10),
+    r(false, 30, 12),
+    r(true, 24, 8),
+    r(true, 10, 5, 'bbbbbbbbbbbb'),
+    { ...r(false, 1, 0), status: 'cancelled' },
+  ])
   const row = out.split('\n').find((l) => l.startsWith('aaaaaaaaaa'))!
   assert.match(row, /2\/3/)
   assert.match(row, /24\.0/)

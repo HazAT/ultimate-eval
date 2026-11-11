@@ -32,8 +32,12 @@ Runs go one after another; each spends real subscription quota (estimate: $3–1
    question cards with `questions/answer` (a multi answer as a list from ce22290 on, joined with ", " before), read
    the `/api/events` stream. It is `claude -p` on Opus 5.5 at low effort with no tools and its own short system prompt
    (about 1k tokens a call), fixed across runs and pinned by `simPromptSha`.
-6. Watchdog: more than 30 minutes after the first prompt is `timeout`, 10 minutes with nothing new is `hang`, a dead
-   server is `crash`; each records where it stuck and the cost so far.
+6. Watchdog: more than 30 minutes after the first prompt is `timeout`; 10 minutes without progress (something
+   Ultimate said, a real change in its conversations, tasks or messages, or a user action; the simulated user's
+   waits and stream reconnects do not count) is `hang`; a dead supervisor, or no event stream for 2 minutes (a dead
+   or restart-looping core), is `crash`. Each records where it stood (`failure.stuck`) and the cost so far. Every
+   API request is bounded. Ctrl+C or TERM stops the run as `cancelled` (kept in `runs/`, left out of the matrix) and
+   cleans up; a second signal kills at once.
 7. Collects every conversation's history and the Messages log over the API, stops the server, copies its sqlite files.
 8. Runs the project's tests and the hidden acceptance spec (`scenarios/<name>/accept.ts`, Playwright, never inside the
    project) on a fresh clone of the project's `main`, with screenshots.
@@ -43,7 +47,8 @@ Runs go one after another; each spends real subscription quota (estimate: $3–1
 
 - `result.json`: pins (`ultimateCommit`, `scenarioSha`, `setup`/`setupSha`, families, roles, sim model and
   `simPromptSha`), `pass`, `status`, `failure`, `minutes`, `features`, `acceptance`, `projectTests`, `noRemote`,
-  `models` (expected vs what actually ran per role, from each assistant entry), `answerShape`, `sim` (calls, cost,
+  `models` (each configured role: `ok`, `mismatch` or `not exercised`, from what its conversations' assistant
+  entries ran; a mismatch fails the run), `answerShape`, `sim` (calls, cost,
   improvised answers, nudges, refused answers), and the `scorecard`: coordinators matched to features, workers per
   coordinator, plans, landings (and that nothing was pushed), timing, tokens and cost per model, cache hit rate,
   questions asked with their kinds and wait, watchdog failures, tool errors.
@@ -51,7 +56,7 @@ Runs go one after another; each spends real subscription quota (estimate: $3–1
   with its prompt and decision; `screenshots/`; `acceptance.json`; `project-tests.txt`; `home/` (sqlite, supervisor log).
 
 A run passes when the simulated user said done with nothing busy, every acceptance check and the project's tests
-pass, every coordinator landed, and the project still has no remote and nothing was pushed. Workers and plans are
+pass, every coordinator landed (a lander note with a commit; ordinary notes do not count), no role ran an unexpected model, and the project still has no remote and nothing was pushed. Workers and plans are
 measured, not required.
 
 Not verified: the thinking level that ran (no API exposes it); `models` checks the model only.

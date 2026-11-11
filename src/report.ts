@@ -29,7 +29,8 @@ export function readRuns(dir: string): RunResult[] {
 
 export function table(runs: RunResult[]) {
   const groups = new Map<string, RunResult[]>()
-  for (const r of runs) {
+  // A run we stopped ourselves (Ctrl+C) says nothing about Ultimate: it stays in runs/ but out of the matrix.
+  for (const r of runs.filter((r) => r.status !== 'cancelled')) {
     const key = `${r.pins.ultimateCommit.slice(0, 10)}  ${r.pins.setup}  ${r.pins.scenario}@${r.pins.scenarioSha.slice(0, 6)}`
     groups.set(key, [...(groups.get(key) ?? []), r])
   }

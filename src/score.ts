@@ -62,6 +62,12 @@ const toolCalls = (entry: Entry) => {
     : []
 }
 
+/** A lander's landing note, as Ultimate's own lineage memory tells it from an ordinary note (`source`, `sha`). */
+export const isLanding = (e: Entry) => {
+  const data = e.data as { source?: string; sha?: unknown } | undefined
+  return e.kind === 'lineage.note' && data?.source === 'lander' && typeof data.sha === 'string'
+}
+
 /** The features a coordinator works on, by words in its intent and title. */
 export function featuresOf(text: string, words: Record<string, RegExp>) {
   return Object.entries(words)
@@ -82,7 +88,7 @@ export function score(data: Collected, featureWords: Record<string, RegExp>): Sc
   const minutes = (at: number) => Math.round(((at - data.firstPromptAt) / 60000) * 10) / 10
   const root = data.histories[1] ?? []
   const branched = root.filter((e) => e.kind === 'lineage.branched')
-  const notes = root.filter((e) => e.kind === 'lineage.note')
+  const notes = root.filter((e) => isLanding(e))
   const landedFrom = new Set(notes.map((n) => (n.data as { from?: number }).from))
   const coordinatorIds = new Set(branched.map((e) => (e.data as { branch: number }).branch))
   const byId = new Map(data.conversations.map((c) => [c.id, c]))

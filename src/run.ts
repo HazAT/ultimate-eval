@@ -18,7 +18,7 @@ import { decide, shapeAnswers, SIM_EFFORT, SIM_MODEL, SIM_PROMPT_SHA, turnPrompt
 import type { Card, Decision, Said } from './sim.ts'
 import { answerText, score } from './score.ts'
 import type { Scorecard } from './score.ts'
-import { expected, readSetup, seedUserHome } from './setup.ts'
+import { readSetup, seedUserHome, verifyModels } from './setup.ts'
 
 export const ROOT = resolve(import.meta.dirname, '..')
 export const BUDGET_MIN = 30
@@ -34,7 +34,14 @@ export type RunOptions = {
   log?: (line: string) => void
 }
 
-type Failure = { reason: 'timeout' | 'hang' | 'crash' | 'error'; atMin: number; detail: string; stuck: unknown }
+type Failure = {
+  reason: 'timeout' | 'hang' | 'crash' | 'cancelled' | 'error'
+  atMin: number
+  detail: string
+  stuck: unknown
+}
+/** The event stream down this long means the core is dead or stuck restarting. */
+const DOWN_MIN = 2
 
 const sh = (cmd: string, args: string[], cwd: string, env?: NodeJS.ProcessEnv) =>
   execFileSync(cmd, args, { cwd, env, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] }).trim()
@@ -53,22 +60,26 @@ const freePort = () =>
     })
   })
 
-const alive = (pid: number) => {
+/** Send `signal` to process group `pgid`; false when the group has no member left. */
+const signalGroup = (pgid: number, signal: NodeJS.Signals | 0) => {
   try {
-    process.kill(pid, 0)
+    process.kill(-pgid, signal)
     return true
   } catch {
-    return false
+    return false // ESRCH: the whole group is gone
   }
 }
 
-/** Stop a detached child by its own process group (its real pid, never a pattern). */
-async function stopGroup(child: ChildProcess) {
-  const pid = child.pid
-  if (!pid || !alive(pid)) return
-  process.kill(-pid, 'SIGTERM')
-  for (let i = 0; i < 60 && alive(pid); i++) await new Promise((d) => setTimeout(d, 250))
-  if (alive(pid)) process.kill(-pid, 'SIGKILL')
+/**
+ * Stop a detached child's whole process group, by the real pid we spawned it with (never a pattern): TERM, then KILL
+ * for any member still there after 15 s, whether or not the leader has exited.
+ */
+export async function stopGroup(child: ChildProcess | undefined) {
+  const pgid = child?.pid
+  if (!pgid || pgid <= 1) return
+  if (!signalGroup(pgid, 'SIGTERM')) return
+  for (let i = 0; i < 60 && signalGroup(pgid, 0); i++) await new Promise((d) => setTimeout(d, 250))
+  signalGroup(pgid, 'SIGKILL')
 }
 
 /** A short hash over every file of a folder, so a run pins the exact scenario. */
@@ -137,10 +148,25 @@ export async function run(options: RunOptions) {
   let ultimateId = 0
   const result: Record<string, unknown> = { id, pins, startedAt: new Date(startedAt).toISOString() }
 
-  const cleanupOnExit = () => {
-    if (server?.pid && alive(server.pid)) process.kill(-server.pid, 'SIGKILL')
+  // Ctrl+C or a TERM ends the run as a failure: the loop sees `cancelled`, the finally block cleans up. A second
+  // signal kills the groups at once and leaves.
+  let cancelled = false
+  const groups = new Set<ChildProcess>()
+  const onSignal = (signal: NodeJS.Signals) => {
+    if (cancelled) {
+      for (const child of groups) if (child.pid && child.pid > 1) signalGroup(child.pid, 'SIGKILL')
+      process.exit(130)
+    }
+    cancelled = true
+    log(`${signal}: stopping the run`)
+    instance?.close()
   }
-  process.once('exit', cleanupOnExit)
+  const killOnExit = () => {
+    for (const child of groups) if (child.pid && child.pid > 1) signalGroup(child.pid, 'SIGKILL')
+  }
+  process.on('SIGINT', onSignal)
+  process.on('SIGTERM', onSignal)
+  process.on('exit', killOnExit)
 
   try {
     // The Ultimate under test: a shared clone writes nothing into the source repository.
@@ -171,6 +197,7 @@ export async function run(options: RunOptions) {
     const port = await freePort()
     const base = `http://127.0.0.1:${port}`
     log(`starting ${base}`)
+    if (cancelled) throw new Error('cancelled')
     server = spawn(process.execPath, ['bin/ultimate.ts', project, '--port', String(port), '--no-open'], {
       cwd: clone,
       detached: true,
@@ -182,9 +209,11 @@ export async function run(options: RunOptions) {
         ULTIMATE_NO_OPEN: '1',
       },
     })
+    groups.add(server)
     let exited = false
     server.on('exit', () => (exited = true))
     for (let i = 0; ; i++) {
+      if (cancelled) throw new Error('cancelled')
       if (exited) throw new Error('the scratch server exited while starting')
       if (i > 480) throw new Error('the scratch server did not become ready in 2 minutes')
       const ok = await fetch(`${base}/api/models`).then((r) => r.ok, () => false)
@@ -203,7 +232,10 @@ export async function run(options: RunOptions) {
     const seenMessages = new Set<number>()
     const shown = new Set<string>()
     let lastSimAt = 0
+    // The hang clock: what Ultimate said, a real change of its state, or something the user did. Simulated-user calls
+    // that only wait are no progress.
     let lastNews = Date.now()
+    let lastStuck: unknown = null
     let calls = 0
     let nudges = 0
 
@@ -246,6 +278,7 @@ export async function run(options: RunOptions) {
       throw new Error(`the simulated user did not open: ${JSON.stringify(opening?.call.decision)}`)
     firstPromptAt = Date.now()
     startedAt = firstPromptAt
+    lastNews = firstPromptAt
     await instance.submit(ultimateId, opening.call.decision.text)
     said.push({ at: firstPromptAt, who: 'you', text: opening.call.decision.text })
     opening.record.applied = 'sent'
@@ -254,10 +287,25 @@ export async function run(options: RunOptions) {
     for (;;) {
       await instance.changed(15_000)
       const now = Date.now()
-      if (exited) {
-        failure = { reason: 'crash', atMin: (now - firstPromptAt) / 60000, detail: 'the scratch server exited', stuck: null }
+      const elapsedMin = (now - firstPromptAt) / 60000
+      if (cancelled) {
+        failure = { reason: 'cancelled', atMin: elapsedMin, detail: 'interrupted', stuck: lastStuck }
         break
       }
+      if (exited) {
+        failure = { reason: 'crash', atMin: elapsedMin, detail: 'the scratch supervisor exited', stuck: lastStuck }
+        break
+      }
+      if (instance.downSince && now - instance.downSince > DOWN_MIN * 60000) {
+        failure = {
+          reason: 'crash',
+          atMin: elapsedMin,
+          detail: `the core served no event stream for ${DOWN_MIN} minutes`,
+          stuck: lastStuck,
+        }
+        break
+      }
+      if (instance.downSince) continue // restarting: wait for it to come back
       // What the user sees: every message to the user (cards and one-way), and @ultimate's final answers.
       let news = false
       for (const message of instance.doc<{ messages: Message[] }>(1, 'board')?.messages ?? []) {
@@ -287,19 +335,20 @@ export async function run(options: RunOptions) {
       }
       if (news) lastNews = now
 
-      const elapsedMin = (now - firstPromptAt) / 60000
-      const stuck = () => ({
-        busy: instance!.conversations.filter((c) => c.busy).map((c) => ({ id: c.id, title: c.title, label: c.label })),
-        open: openQuestions(instance!.doc(1, 'board')).map((m) => ({ id: m.id, from: m.from, text: m.text.slice(0, 300) })),
+      // Where it stands, kept from the last time the instance answered, for whatever failure comes.
+      lastStuck = {
+        busy: instance.conversations.filter((c) => c.busy).map((c) => ({ id: c.id, title: c.title, label: c.label })),
+        open: openQuestions(instance.doc(1, 'board')).map((m) => ({ id: m.id, from: m.from, text: m.text.slice(0, 300) })),
         lastSaid: said.at(-1),
-      })
+        lastProgressMin: Math.round(((now - Math.max(instance.lastProgress, lastNews)) / 60000) * 10) / 10,
+      }
       if (elapsedMin > BUDGET_MIN) {
-        failure = { reason: 'timeout', atMin: elapsedMin, detail: `not done in ${BUDGET_MIN} minutes`, stuck: stuck() }
+        failure = { reason: 'timeout', atMin: elapsedMin, detail: `not done in ${BUDGET_MIN} minutes`, stuck: lastStuck }
         break
       }
-      const quiet = (now - Math.max(instance.lastChange, lastSimAt, lastNews)) / 60000
+      const quiet = (now - Math.max(instance.lastProgress, lastNews)) / 60000
       if (quiet > HANG_MIN) {
-        failure = { reason: 'hang', atMin: elapsedMin, detail: `nothing new for ${HANG_MIN} minutes`, stuck: stuck() }
+        failure = { reason: 'hang', atMin: elapsedMin, detail: `nothing new for ${HANG_MIN} minutes`, stuck: lastStuck }
         break
       }
 
@@ -308,7 +357,7 @@ export async function run(options: RunOptions) {
       const due = news || (idle && now - lastSimAt > 3 * 60000) || (open.length > 0 && now - lastSimAt > 5 * 60000)
       if (!due) continue
       if (calls >= MAX_SIM_CALLS) {
-        failure = { reason: 'error', atMin: elapsedMin, detail: `${MAX_SIM_CALLS} simulated user calls`, stuck: stuck() }
+        failure = { reason: 'error', atMin: elapsedMin, detail: `${MAX_SIM_CALLS} simulated user calls`, stuck: lastStuck }
         break
       }
       const turn = await ask(false)
@@ -317,6 +366,7 @@ export async function run(options: RunOptions) {
       log(`sim: ${decision.action} (${decision.why})`)
       if (decision.action === 'message') {
         if (turn.quietMinutes >= 5) nudges++
+        lastNews = Date.now()
         await instance.submit(ultimateId, decision.text)
         said.push({ at: Date.now(), who: 'you', text: decision.text })
         turn.record.applied = 'sent'
@@ -337,6 +387,7 @@ export async function run(options: RunOptions) {
               }
             : { messageId: card.id, text: decision.note ?? decision.answers.map((a) => a.answer).flat().join('\n') }
           await instance.action('questions', 'answer', args)
+          lastNews = Date.now()
           turn.record.applied = `answered ${JSON.stringify(args)}`
           said.push({
             at: Date.now(),
@@ -359,7 +410,8 @@ export async function run(options: RunOptions) {
       }
     }
 
-    // Collect everything over the API before the server stops.
+    if (cancelled) throw new Error('cancelled')
+    // Collect everything over the API before the server stops; each request is bounded, a dead core yields none.
     const conversations = instance.conversations
     const histories: Record<number, Awaited<ReturnType<Instance['history']>>> = {}
     for (const c of conversations) {
@@ -396,12 +448,14 @@ export async function run(options: RunOptions) {
     }
     writeFileSync(join(out, 'project-tests.txt'), projectTests.output)
     const sitePort = await freePort()
+    if (cancelled) throw new Error('cancelled')
     const site = spawn(process.execPath, ['serve.js'], {
       cwd: checkout,
       detached: true,
       stdio: 'ignore',
       env: { ...cleanEnv(), PORT: String(sitePort) },
     })
+    groups.add(site)
     let acceptance
     try {
       for (let i = 0; i < 40; i++) {
@@ -418,20 +472,12 @@ export async function run(options: RunOptions) {
     const features = Object.fromEntries(
       Object.entries(FEATURES as Record<string, string[]>).map(([f, checks]) => [f, checks.every(passed)]),
     )
-    const modelCheck = Object.fromEntries(
-      ['ultimate', 'coordinator'].map((role) => {
-        const want = expected(setup, role)?.model
-        const ran = card.modelsByRole[role] ?? []
-        return [role, { expected: want, ran, ok: ran.length > 0 && ran.every((m) => m === want) }]
-      }),
-    )
-    const workerRan = Object.entries(card.modelsByRole)
-      .filter(([role]) => !['ultimate', 'coordinator', 'lander', 'other'].includes(role))
-      .flatMap(([, models]) => models)
+    const models = verifyModels(setup, card.modelsByRole)
     const simCost = simLog.reduce((n, s) => n + (s.costUsd ?? 0), 0)
     const allLanded = card.coordinators.length > 0 && card.coordinators.every((c) => c.landed)
     const pass =
       !failure &&
+      Object.values(models).every((m) => m.status !== 'mismatch') &&
       !!simDone &&
       acceptance.checks.every((c: { pass: boolean }) => c.pass) &&
       projectTests.pass &&
@@ -451,7 +497,7 @@ export async function run(options: RunOptions) {
       acceptance: acceptance.checks,
       noRemote: !remotes,
       mainLog: mainLog.split('\n'),
-      models: { ...modelCheck, worker: { expected: expected(setup, 'worker')?.model, ran: [...new Set(workerRan)] } },
+      models,
       answerShape: joinMulti ? 'joined' : 'list',
       sim: {
         calls: simLog.length,
@@ -464,16 +510,29 @@ export async function run(options: RunOptions) {
     })
   } catch (error) {
     result.pass = false
-    result.status = 'error'
-    result.failure = { reason: 'error', detail: String(error instanceof Error ? error.stack : error) }
+    result.status = cancelled ? 'cancelled' : 'error'
+    result.failure = {
+      reason: result.status,
+      ...(firstPromptAt ? { atMin: (Date.now() - firstPromptAt) / 60000 } : {}),
+      detail: String(error instanceof Error ? error.stack : error),
+      stuck: failure?.stuck ?? null,
+    }
     log(`error: ${String(error)}`)
   } finally {
     instance?.close()
-    if (server) await stopGroup(server)
-    process.off('exit', cleanupOnExit)
-    writeFileSync(join(out, 'sim.json'), JSON.stringify({ said, calls: simLog }, null, 1))
-    result.finishedAt = new Date().toISOString()
-    writeFileSync(join(out, 'result.json'), JSON.stringify(result, null, 2))
+    // Each step on its own: one failing must not keep the others from running.
+    for (const child of groups) await stopGroup(child).catch((e) => log(`stopping ${child.pid}: ${e}`))
+    process.off('SIGINT', onSignal)
+    process.off('SIGTERM', onSignal)
+    process.off('exit', killOnExit)
+    try {
+      writeFileSync(join(out, 'sim.json'), JSON.stringify({ said, calls: simLog }, null, 1))
+      result.simCostUsd = Math.round(simLog.reduce((n, s) => n + (s.costUsd ?? 0), 0) * 100) / 100
+      result.finishedAt = new Date().toISOString()
+      writeFileSync(join(out, 'result.json'), JSON.stringify(result, null, 2))
+    } catch (e) {
+      log(`writing results: ${e}`)
+    }
     if (!options.keep) {
       rmSync(tmp, { recursive: true, force: true })
       for (const dir of claudeProjects(tmp)) rmSync(dir, { recursive: true, force: true })

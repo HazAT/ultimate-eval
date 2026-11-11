@@ -26,6 +26,26 @@ export function readSetup(path: string): Setup {
 /** The model and thinking a role is expected to run on. */
 export const expected = (setup: Setup, role: string) => setup.families[setup.roles[role] ?? 'default']
 
+export type ModelCheck = { expected: string; ran: string[]; status: 'ok' | 'mismatch' | 'not exercised' }
+
+/**
+ * Each configured role against the models its conversations actually ran (from their assistant entries): `ok`, a
+ * `mismatch` (any other model), or `not exercised` (no conversation of that role ran).
+ */
+export function verifyModels(setup: Setup, ranByRole: Record<string, string[]>) {
+  const out: Record<string, ModelCheck> = {}
+  for (const role of Object.keys(setup.roles)) {
+    const want = expected(setup, role)!.model
+    const ran = ranByRole[role] ?? []
+    out[role] = {
+      expected: want,
+      ran,
+      status: !ran.length ? 'not exercised' : ran.every((m) => m === want) ? 'ok' : 'mismatch',
+    }
+  }
+  return out
+}
+
 /**
  * Seed `<userHome>/.ultimate`: settings (no onboarding, no self-update of the temporary clone), the project's trust
  * (so its lander checks apply, as when the user trusts it), the families, and one overlay per role.

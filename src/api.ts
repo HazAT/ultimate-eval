@@ -119,9 +119,15 @@ export class Instance {
   tasks: { tasks?: Record<string, { state?: { status?: string } }> } = {}
   /** Documents by `<conversation>:<kind>`. */
   docs = new Map<string, unknown>()
-  /** Time (ms) anything last changed on the stream: the hang watchdog's clock. */
-  lastChange = Date.now()
+  /**
+   * Time (ms) the instance's state last really changed: a conversation, task or watched document that differs from what
+   * we had. A reconnect's identical snapshot is no progress. The hang watchdog's clock.
+   */
+  lastProgress = Date.now()
+  /** Since when (ms) the event stream is down: the core died or restarts; undefined while connected. */
+  downSince?: number = Date.now()
   private controller = new AbortController()
+  private seen = new Map<string, string>()
   private stream?: string
   private subs = new Map<number, { conversation: number; docs: string[] }>()
   private listeners = new Set<() => void>()
@@ -134,8 +140,13 @@ export class Instance {
     return { 'content-type': 'application/json', origin: this.base }
   }
 
+  /** Every request ends after `ms`, or when the instance is closed. */
+  private signal(ms = 30_000) {
+    return AbortSignal.any([this.controller.signal, AbortSignal.timeout(ms)])
+  }
+
   async get<T>(path: string): Promise<T> {
-    const response = await fetch(this.base + path, { headers: { origin: this.base } })
+    const response = await fetch(this.base + path, { headers: { origin: this.base }, signal: this.signal() })
     if (!response.ok) throw new Error(`GET ${path}: ${response.status} ${await response.text()}`)
     return (await response.json()) as T
   }
@@ -145,6 +156,7 @@ export class Instance {
       method: 'POST',
       headers: this.headers(),
       body: JSON.stringify(body),
+      signal: this.signal(),
     })
     const text = await response.text()
     if (!response.ok) throw new Error(`POST ${path}: ${response.status} ${text}`)
@@ -219,33 +231,54 @@ export class Instance {
     await this.post(`/api/events/${this.stream}/${sub}`, { conversation, docs, view: false })
   }
 
-  /** Open the event stream; it reconnects until `close`. Resolves once the first snapshot is in. */
-  async open() {
-    let ready: () => void
-    const first = new Promise<void>((done) => (ready = done))
+  /**
+   * Open the event stream; it reconnects until `close`, as the UI does. Resolves once the first snapshot is in, and
+   * rejects when that takes longer than `ms` or the instance is closed first.
+   */
+  async open(ms = 60_000) {
+    let ready!: () => void
+    let fail!: (error: Error) => void
+    const first = new Promise<void>((done, reject) => ((ready = done), (fail = reject)))
+    const timer = setTimeout(() => fail(new Error(`no event stream within ${ms / 1000} s`)), ms)
+    this.controller.signal.addEventListener('abort', () => fail(new Error('closed')), { once: true })
     void (async () => {
       while (!this.controller.signal.aborted) {
         try {
           await this.read(() => ready())
-        } catch (error) {
-          if (this.controller.signal.aborted) return
-          // A restart or a dropped stream: open it again, as the UI does.
+        } catch {
+          // A restart or a dropped stream: open it again.
         }
+        this.downSince ??= Date.now()
+        if (this.controller.signal.aborted) return
         await new Promise((done) => setTimeout(done, 500))
       }
     })()
-    await first
+    try {
+      await first
+    } finally {
+      clearTimeout(timer)
+    }
+  }
+
+  /** Note a value under `key`; true when it differs from the last one (real progress). */
+  private changedValue(key: string, value: unknown) {
+    const json = JSON.stringify(value)
+    if (this.seen.get(key) === json) return false
+    this.seen.set(key, json)
+    return true
   }
 
   private async read(onReady: () => void) {
+    // Only the connect is bounded: an open stream stays open (the server sends a heartbeat every 15 s).
+    const connect = new AbortController()
+    const timer = setTimeout(() => connect.abort(), 15_000)
     const response = await fetch(this.base + '/api/events', {
       headers: { origin: this.base },
-      signal: this.controller.signal,
-    })
+      signal: AbortSignal.any([this.controller.signal, connect.signal]),
+    }).finally(() => clearTimeout(timer))
     if (!response.ok || !response.body) throw new Error(`events: ${response.status}`)
     const decoder = new TextDecoder()
     let buffer = ''
-    const subOf = new Map<number, number>()
     for await (const chunk of response.body) {
       buffer += decoder.decode(chunk as Uint8Array, { stream: true })
       let end
@@ -257,20 +290,26 @@ export class Instance {
         if (!name || !data.length) continue
         const payload = JSON.parse(data.at(-1)!)
         const sub = data.length > 1 ? Number(data[0]) : undefined
+        let key: string
         if (name === 'stream') {
           this.stream = payload.id
-          for (const id of this.subs.keys()) {
-            subOf.set(id, this.subs.get(id)!.conversation)
-            await this.subscribe(id)
-          }
+          for (const id of this.subs.keys()) await this.subscribe(id)
+          this.downSince = undefined
           onReady()
-        } else if (name === 'conversations') this.conversations = payload
-        else if (name === 'tasks') this.tasks = payload
-        else if ((name === 'doc' || name === 'docOps') && sub !== undefined) {
-          const key = `${this.subs.get(sub)?.conversation}:${payload.kind}`
+          continue
+        } else if (name === 'conversations') {
+          this.conversations = payload
+          key = name
+        } else if (name === 'tasks') {
+          this.tasks = payload
+          key = name
+        } else if ((name === 'doc' || name === 'docOps') && sub !== undefined) {
+          key = `${this.subs.get(sub)?.conversation}:${payload.kind}`
           this.docs.set(key, name === 'doc' ? payload.value : applyOps(this.docs.get(key) ?? {}, payload.ops))
         } else continue
-        this.lastChange = Date.now()
+        if (!this.changedValue(key, name === 'conversations' || name === 'tasks' ? payload : this.docs.get(key)))
+          continue
+        this.lastProgress = Date.now()
         for (const listener of [...this.listeners]) listener()
       }
     }
