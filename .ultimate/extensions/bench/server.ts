@@ -100,7 +100,8 @@ const summary = (r: RunResult) => {
     setup: r.pins.setup,
     scenario: r.pins.scenario,
     features: r.features ?? {},
-    costUsd: Math.round(((card?.usage.totalCostUsd ?? 0) + (r.sim?.costUsd ?? 0)) * 100) / 100,
+    // A run that ended early has only `simCostUsd`.
+    costUsd: Math.round(((card?.usage.totalCostUsd ?? 0) + (r.sim?.costUsd ?? (r.simCostUsd as number | undefined) ?? 0)) * 100) / 100,
     cacheHitRate: card?.usage.cacheHitRate,
     coordinators: card?.coordinators.length ?? 0,
     landed: card?.coordinators.filter((c) => c.landed).length ?? 0,
@@ -168,7 +169,7 @@ export const actions = {
   async transcript(args: unknown, ctx: Ctx) {
     const id = runId(arg(args, 'id'))
     const conversation = Number(fileName(String(arg(args, 'conversation')), /^\d+$/, 'a conversation id'))
-    const entries = readJson<{ id: number; kind: string; model?: { role: string; content?: unknown; timestamp?: number; model?: string; provider?: string; usage?: { cost?: { total?: number } }; toolName?: string; isError?: boolean }[] }[]>(
+    const entries = readJson<{ id: number; kind: string; data?: unknown; model?: { role: string; content?: unknown; timestamp?: number; model?: string; provider?: string; usage?: { cost?: { total?: number } }; toolName?: string; isError?: boolean }[] }[]>(
       join(runsDir(ctx), id, 'transcripts', `${conversation}.json`),
     )
     if (!entries) throw new Error(`No transcript for #${conversation}`)
@@ -200,6 +201,8 @@ export const actions = {
         isError: m?.isError,
         text: cut(texts(m?.content), m?.role === 'toolResult' ? 1500 : 4000),
         calls,
+        // An entry with no message, such as the lander's steps, says what it says in its data.
+        ...(!m && e.data !== undefined ? { data: cut(JSON.stringify(e.data), 1500) } : {}),
       }
     })
     return { total: entries.length, start, entries: page }
