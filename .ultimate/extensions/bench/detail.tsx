@@ -233,7 +233,11 @@ function Scorecard({ r }: { r: Result }) {
 
         {card && card.questions.asked > 0 && (
           <Section
-            aside={`${card.questions.answered}/${card.questions.asked} answered`}
+            aside={`${card.questions.answered}/${card.questions.asked} answered${
+              card.questions.multi
+                ? ` · multi ${card.questions.multiAnswered ?? '?'}/${card.questions.multi} answered`
+                : ''
+            }`}
             title="questions asked"
           >
             <ul className="space-y-2">

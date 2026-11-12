@@ -61,6 +61,7 @@ export type Group = {
   medianMin?: number
   medianCost?: number
   features: Record<string, number>
+  multi: { asked: number; answered: number }
   failures: { id: string; status: string }[]
   ids: string[]
 }
@@ -123,6 +124,7 @@ export type Result = {
       asked: number
       withCards: number
       multi: number
+      multiAnswered?: number
       answered: number
       waitSec: number[]
       texts: { id: number; from: number; kinds: string[]; text: string }[]

@@ -39,6 +39,7 @@ export type Scorecard = {
     asked: number
     withCards: number
     multi: number
+    multiAnswered: number
     answered: number
     waitSec: number[]
     texts: { id: number; from: number | string; kinds: string[]; text: string }[]
@@ -169,6 +170,7 @@ export function score(data: Collected, featureWords: Record<string, RegExp>): Sc
   const prompt = sum('input') + sum('cacheRead') + sum('cacheWrite')
 
   const toUser = data.board.messages.filter((m) => m.to === 'user' && m.reply)
+  const isMulti = (m: (typeof toUser)[number]) => !!m.questions?.some((q) => q.kind === 'multi')
   const replyAt = new Map(
     data.board.messages.filter((m) => m.from === 'user' && m.re).map((m) => [m.re!, m.at]),
   )
@@ -206,7 +208,8 @@ export function score(data: Collected, featureWords: Record<string, RegExp>): Sc
     questions: {
       asked: toUser.length,
       withCards: toUser.filter((m) => m.questions?.length).length,
-      multi: toUser.filter((m) => m.questions?.some((q) => q.kind === 'multi')).length,
+      multi: toUser.filter(isMulti).length,
+      multiAnswered: toUser.filter((m) => isMulti(m) && m.state === 'answered').length,
       answered: toUser.filter((m) => m.state === 'answered').length,
       waitSec,
       texts: toUser.map((m) => ({

@@ -9,7 +9,12 @@ export type RunResult = {
   minutes?: number
   pins: { ultimateCommit: string; setup: string; scenario: string; scenarioSha: string; simPromptSha: string }
   features?: Record<string, boolean>
-  scorecard?: { usage: { totalCostUsd: number }; coordinators: unknown[]; workers: { total: number } }
+  scorecard?: {
+    usage: { totalCostUsd: number }
+    coordinators: unknown[]
+    workers: { total: number }
+    questions?: { multi: number; multiAnswered?: number }
+  }
   sim?: { costUsd: number }
 }
 
@@ -39,6 +44,8 @@ export type Group = {
   medianCost?: number
   /** Each feature's passing runs. */
   features: Record<string, number>
+  /** Runs where Ultimate asked a multi-choice card, and where one was answered. */
+  multi: { asked: number; answered: number }
   failures: { id: string; status: string }[]
 }
 
@@ -64,13 +71,17 @@ export function groups(runs: RunResult[]): Group[] {
       medianMin: median(list.flatMap((r) => (r.minutes === undefined ? [] : [r.minutes]))),
       medianCost: median(list.map((r) => (r.scorecard?.usage.totalCostUsd ?? 0) + (r.sim?.costUsd ?? 0))),
       features,
+      multi: {
+        asked: list.filter((r) => (r.scorecard?.questions?.multi ?? 0) > 0).length,
+        answered: list.filter((r) => (r.scorecard?.questions?.multiAnswered ?? 0) > 0).length,
+      },
       failures: list.filter((r) => !r.pass).map((r) => ({ id: r.id, status: r.status })),
     }
   })
 }
 
 export function table(runs: RunResult[]) {
-  const rows = [['commit  setup  scenario', 'pass/N', 'median min', 'median $', 'features passing', 'failures']]
+  const rows = [['commit  setup  scenario', 'pass/N', 'median min', 'median $', 'features passing', 'multi asked/answered', 'failures']]
   for (const g of groups(runs)) {
     const n = g.runs.length
     rows.push([
@@ -79,6 +90,7 @@ export function table(runs: RunResult[]) {
       g.medianMin === undefined ? '-' : g.medianMin.toFixed(1),
       (g.medianCost ?? 0).toFixed(2),
       Object.entries(g.features).map(([f, k]) => `${f} ${k}/${n}`).join(', ') || '-',
+      `${g.multi.asked}/${n} ${g.multi.answered}/${n}`,
       g.failures.map((f) => f.status).join(', ') || '-',
     ])
   }

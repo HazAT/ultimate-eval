@@ -53,7 +53,7 @@ Runs go one after another; each spends real subscription quota (estimate: $3–1
   `unverified`), `answerShape`, `sim` (calls, cost,
   improvised answers, nudges, refused answers), and the `scorecard`: coordinators matched to features, workers per
   coordinator, plans, landings (and that nothing was pushed), timing, tokens and cost per model, cache hit rate,
-  questions asked with their kinds and wait, watchdog failures, tool errors.
+  questions asked with their kinds and wait (multi-choice cards asked and answered), watchdog failures, tool errors.
 - `transcripts/`: every conversation, the Messages log, the conversation list; `sim.json`: every simulated-user turn
   with its prompt and decision; `screenshots/`; `acceptance.json`; `project-tests.txt`; `home/` (sqlite, supervisor log).
 
@@ -68,3 +68,7 @@ Not verified: the thinking level that ran (no API exposes it); `models` checks t
 `scenarios/<name>/`: `scenario.md` (the card the simulated user plays: goal, done, prepared answers, limits; it never
 names files or code), `fixture/` (the starting project, with its own tests and lander checks), `accept.ts` (the
 hidden spec, its feature map and the words that match coordinators to features).
+
+A variant changes only the card: `recipe-v2-pick` links `fixture` to recipe-v2's and re-exports its `accept.ts`, and
+asks Ultimate to let the person tick which features to build now (a multi-choice card exercises `answerShape`). The
+matrix shows per row in how many runs a multi card was asked and answered.

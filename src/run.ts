@@ -8,7 +8,7 @@
 import { execFileSync, spawn } from 'node:child_process'
 import type { ChildProcess } from 'node:child_process'
 import { createHash } from 'node:crypto'
-import { cpSync, existsSync, mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { cpSync, existsSync, mkdirSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs'
 import { createServer } from 'node:net'
 import { DatabaseSync } from 'node:sqlite'
 import { homedir } from 'node:os'
@@ -87,13 +87,13 @@ export async function stopGroup(child: ChildProcess | undefined) {
   signalGroup(pgid, 'SIGKILL')
 }
 
-/** A short hash over every file of a folder, so a run pins the exact scenario. */
+/** A short hash over every file of a folder, following links (a variant links its base's fixture), so a run pins the exact scenario. */
 export function folderSha(dir: string) {
   const hash = createHash('sha256')
   const walk = (d: string) => {
     for (const name of readdirSync(d).sort()) {
       const path = join(d, name)
-      if (readdirSync(d, { withFileTypes: true }).find((e) => e.name === name)!.isDirectory()) walk(path)
+      if (statSync(path).isDirectory()) walk(path)
       else hash.update(path.slice(dir.length)).update(readFileSync(path))
     }
   }
@@ -250,7 +250,7 @@ export async function run(options: RunOptions) {
 
     // The project: the fixture as a git repository with one commit and no remote.
     const project = join(tmp, 'project')
-    cpSync(join(scenarioDir, 'fixture'), project, { recursive: true })
+    cpSync(join(scenarioDir, 'fixture'), project, { recursive: true, dereference: true })
     const git = (...args: string[]) => sh('git', args, project)
     git('init', '-q', '-b', 'main')
     git('add', '-A')

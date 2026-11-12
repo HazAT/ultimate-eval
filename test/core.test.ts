@@ -142,8 +142,8 @@ test('score matches coordinators to features, counts workers, plans, landings an
     unknown: ['x/other'],
   })
   assert.deepEqual(
-    { asked: card.questions.asked, multi: card.questions.multi, wait: card.questions.waitSec },
-    { asked: 1, multi: 1, wait: [30] },
+    { asked: card.questions.asked, multi: card.questions.multi, multiAnswered: card.questions.multiAnswered, wait: card.questions.waitSec },
+    { asked: 1, multi: 1, multiAnswered: 1, wait: [30] },
   )
   assert.equal(card.watchdog.failures, 1)
 })
@@ -192,7 +192,7 @@ test('report groups by commit, setup and scenario with passes/N and medians', ()
     minutes,
     pins: { ultimateCommit: commit, setup: 'today', scenario: 'recipe-v2', scenarioSha: 'ffffff', simPromptSha: 'x' },
     features: { search: true, favourites: pass },
-    scorecard: { usage: { totalCostUsd: cost }, coordinators: [], workers: { total: 0 } },
+    scorecard: { usage: { totalCostUsd: cost }, coordinators: [], workers: { total: 0 }, questions: { multi: pass ? 1 : 0, multiAnswered: 0 } },
     sim: { costUsd: 0 },
   })
   const out = table([
@@ -208,6 +208,7 @@ test('report groups by commit, setup and scenario with passes/N and medians', ()
   assert.match(row, /10\.00/)
   assert.match(row, /search 3\/3, favourites 2\/3/)
   assert.match(row, /timeout/)
+  assert.match(row, / 2\/3 0\/3 /)
   const [a, b] = groups([r(true, 20, 10), r(false, 30, 12), r(true, 10, 5, 'bbbbbbbbbbbb')])
   assert.deepEqual([a!.passes, a!.runs.length, a!.medianMin, a!.medianCost, a!.features], [1, 2, 25, 11, { search: 2, favourites: 1 }])
   assert.equal(a!.failures[0]!.status, 'timeout')

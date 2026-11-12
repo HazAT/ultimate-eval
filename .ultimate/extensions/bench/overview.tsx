@@ -103,6 +103,13 @@ function Row({
             {name} {count}/{g.n}
           </span>
         ))}
+        <span
+          className="text-muted-foreground/70"
+          title={`a multi-choice card was asked in ${g.multi.asked} and answered in ${g.multi.answered} of ${g.n} runs`}
+        >
+          multi asked {g.multi.asked}/{g.n}
+          {g.multi.answered !== g.multi.asked && ` · answered ${g.multi.answered}/${g.n}`}
+        </span>
         <span className="ml-auto flex flex-wrap gap-1">
           {g.ids.map((id) => {
             const r = byId.get(id)
