@@ -13,6 +13,7 @@ this project's #119.
 pnpm install
 pnpm eval run --commit <sha|main> [--setup setups/today.json] [--scenario recipe-v2] [--repeat N] [--keep]
 pnpm eval report      # passes/N, median minutes and cost per commit × setup × scenario
+pnpm eval rescore [id…]   # rebuild finished runs' scorecards from what they stored (new checks reach old runs)
 pnpm check && pnpm test
 ```
 
@@ -53,7 +54,22 @@ Runs go one after another; each spends real subscription quota (estimate: $3–1
   `unverified`), `answerShape`, `sim` (calls, cost,
   improvised answers, nudges, refused answers), and the `scorecard`: coordinators matched to features, workers per
   coordinator, plans, landings (and that nothing was pushed), timing, tokens and cost per model, cache hit rate,
-  questions asked with their kinds and wait (multi-choice cards asked and answered), watchdog failures, tool errors.
+  questions asked with their kinds and wait (multi-choice cards asked and answered), watchdog failures, tool errors
+  and checks (below).
+  - `toolErrors` counts real errors only. `toolErrorDetail` sorts every failed tool result:
+    - **benign**, counted apart: `killed` is bash exit 143 (the agent stopping its own dev server); `serverNotUp`
+      is a browser or screenshot `ERR_CONNECTION_REFUSED`, or curl exit 7, before the server was up;
+    - **real**, each listed with conversation and entry: `dirtyWorktree` (a submit with an unresolved merge),
+      `enoent`, `bashExit` (any other failed command), `unknown` (refused tool calls, script errors).
+  - `checks`: hard checks, each gated. A failed `finding` is recorded, shown on the Bench and counted in the
+    report's findings column, and the run still passes; a failed `pass` gate fails the run.
+    - Always: **every coordinator works on a feature** (a coordinator matching no feature is an extra one).
+    - From the scenario's `expect.json`, which is left out of `scenarioSha`, so adding one keeps the matrix rows:
+      - `card {kind?}`: a reply-expected card, with a `kind` question when given;
+      - `askedFirst`: that card came before the first `git commit` anywhere;
+      - `landFailedFirst`: a landing failed on a lander check (a merge conflict does not count), and everything
+        still landed;
+      - `untouched {paths}`: those files are unchanged on main against the fixture commit.
 - `transcripts/`: every conversation, the Messages log, the conversation list; `sim.json`: every simulated-user turn
   with its prompt and decision; `screenshots/`; `acceptance.json`; `project-tests.txt`; `home/` (sqlite, supervisor log).
 
@@ -68,6 +84,14 @@ Not verified: the thinking level that ran (no API exposes it); `models` checks t
 `scenarios/<name>/`: `scenario.md` (the card the simulated user plays: goal, done, prepared answers, limits; it never
 names files or code), `fixture/` (the starting project, with its own tests and lander checks), `accept.ts` (the
 hidden spec, its feature map and the words that match coordinators to features).
+
+| Scenario | What it tests | `expect.json` |
+|---|---|---|
+| `recipe-v2` | three features in parallel | none |
+| `recipe-v2-pick` | the same, picked from a multi card | `card multi` (finding) |
+| `recipe-bug` | search and favourites built, with two planted bugs reported as symptoms | `untouched` (finding) |
+| `recipe-land-fail` | recipe-v2's goal, with a lander-only check that every top-level script is listed in the README | `landFailedFirst` (pass) |
+| `recipe-ambiguous` | "make the site nicer for people with allergies"; the answers make it allergen tags plus a filter | `card`, `askedFirst` (findings) |
 
 A variant changes only the card: `recipe-v2-pick` links `fixture` to recipe-v2's and re-exports its `accept.ts`, and
 asks Ultimate to let the person tick which features to build now (a multi-choice card exercises `answerShape`). The
