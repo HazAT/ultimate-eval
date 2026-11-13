@@ -3,7 +3,7 @@ import assert from 'node:assert/strict'
 import { applyOps, openQuestions } from '../src/api.ts'
 import type { Entry, Message } from '../src/api.ts'
 import { shapeAnswers } from '../src/sim.ts'
-import { errorCategory, findings, gateFailed, score } from '../src/score.ts'
+import { commits, errorCategory, findings, gateFailed, score } from '../src/score.ts'
 import { groups, median, table } from '../src/report.ts'
 import { coordinatorsOf, writeLive } from '../src/live.ts'
 import type { Live } from '../src/live.ts'
@@ -153,14 +153,24 @@ test('tool errors: a killed dev server and a server not up yet are benign, the r
     ['bash', '<harness> [error] Command exited with code 143 </harness>', 'killed'],
     ['browser', 'Error: page.goto: net::ERR_CONNECTION_REFUSED at http://127.0.0.1:8571/', 'serverNotUp'],
     ['screenshot', 'Error: page.goto: net::ERR_CONNECTION_REFUSED at http://127.0.0.1:8734/x', 'serverNotUp'],
-    ['bash', '000 <harness> [error] Command exited with code 7 </harness>', 'serverNotUp'],
+  ]
+  for (const [tool, text, category] of cases) assert.equal(errorCategory(tool, text), category, text)
+  const curl = '000 <harness> [error] Command exited with code 7 </harness>'
+  assert.equal(errorCategory('bash', curl, 'curl -s http://127.0.0.1:8080/'), 'serverNotUp')
+  assert.equal(errorCategory('bash', curl, 'node build.js'), 'bashExit')
+  const more: [string, string, string][] = [
     ['workspace', '<harness> [error] Worktree is dirty: UU app.js </harness>', 'dirtyWorktree'],
     ['read', "ENOENT: no such file or directory, open '/tmp/shots/list.png'", 'enoent'],
     ['bash', 'pass 3 fail 0 <harness> [error] Command exited with code 1 </harness>', 'bashExit'],
     ['codemode', 'ReferenceError: setTimeout is not defined', 'unknown'],
     ['browser', 'Error: locator.waitFor: strict mode violation', 'unknown'],
   ]
-  for (const [tool, text, category] of cases) assert.equal(errorCategory(tool, text), category, text)
+  for (const [tool, text, category] of more) assert.equal(errorCategory(tool, text), category, text)
+  const bash = (command: string) => commits({ name: 'bash', arguments: { command } })
+  assert.equal(bash('git add -A && git commit -qm "x"'), true)
+  assert.equal(bash('git -C /tmp/w -c user.name=x commit -m y'), true)
+  assert.equal(bash('git log --grep=commit'), false)
+  assert.equal(bash('git cat-file -t HEAD^{commit}'), false)
 })
 
 test('hard checks: an extra coordinator, the expected card, asked first, a landing that failed a check', () => {
@@ -209,6 +219,8 @@ test('hard checks: an extra coordinator, the expected card, asked first, a landi
         commitAt(22, 120_000),
         report(23, 10, { outcome: 'failed', reason: 'it conflicts with main in' }),
         report(24, 10, { outcome: 'failed', reason: 'check failed twice: node scripts/check-docs.js' }),
+        // A refused fast-forward is no failed check.
+        report(26, 11, { outcome: 'failed', reason: 'main moved; fast-forward refused' }),
         report(25, 10, { outcome: 'landed', sha: 'a' }),
       ],
     },

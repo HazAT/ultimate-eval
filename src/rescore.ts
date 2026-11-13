@@ -13,6 +13,7 @@ import type { Scorecard } from './score.ts'
 
 export async function rescore(dir: string) {
   const resultPath = join(dir, 'result.json')
+  if (!existsSync(resultPath)) return undefined // still running
   const result = JSON.parse(readFileSync(resultPath, 'utf8'))
   const transcripts = join(dir, 'transcripts')
   if (!result.scorecard || !existsSync(join(transcripts, 'conversations.json'))) return undefined

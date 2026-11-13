@@ -110,10 +110,23 @@ export async function accept(url: string, shots: string, signal?: AbortSignal): 
     await step(checks, 'each recipe shows exactly its allergen tags', async () => {
       await page.goto(url, { waitUntil: 'networkidle' })
       for (const [name, expected] of Object.entries(RECIPES)) {
-        const entry = page.locator('li, article, [role="listitem"]').filter({ hasText: name }).first()
-        expect(await entry.count() > 0, `no list entry for ${name}`)
-        const text = await entry.innerText()
-        const actual = Object.entries(ALLERGENS).filter(([, pattern]) => pattern.test(text)).map(([key]) => key)
+        // Its entry, whatever the markup: the largest box around the visible name that holds no other recipe's name.
+        const text = await page.evaluate(
+          ([name, all]) => {
+            const holds = (el: Element, n: string) => (el as HTMLElement).innerText?.includes(n)
+            const leaf = [...document.querySelectorAll('body *')].find(
+              (el) => (el as HTMLElement).offsetParent !== null && [...el.childNodes].some((c) => c.nodeType === 3 && c.textContent!.includes(name)),
+            )
+            if (!leaf) return undefined
+            let entry = leaf
+            while (entry.parentElement && entry.parentElement !== document.body && !all.some((n) => n !== name && holds(entry.parentElement!, n)))
+              entry = entry.parentElement
+            return (entry as HTMLElement).innerText
+          },
+          [name, Object.keys(RECIPES)] as const,
+        )
+        expect(text !== undefined, `no visible entry for ${name}`)
+        const actual = Object.entries(ALLERGENS).filter(([, pattern]) => pattern.test(text!)).map(([key]) => key)
         expect(JSON.stringify(actual.sort()) === JSON.stringify([...expected].sort()),
           `${name}: expected ${expected.join(', ') || 'none'}, got ${actual.join(', ') || 'none'}`)
       }

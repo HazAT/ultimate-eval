@@ -52,7 +52,7 @@ export type Scorecard = {
   toolErrorDetail: {
     benign: Partial<Record<BenignError, number>>
     real: Partial<Record<RealError, number>>
-    /** Each real error, up to 50. */
+    /** Each real error. */
     list: { conversation: number; entry: number; tool: string; category: RealError; text: string }[]
   }
   /** Hard checks: the scenario's expectations and the extra-coordinator check. A failed `finding` is recorded only. */
@@ -93,10 +93,11 @@ const resultText = (content: unknown) =>
       : ''
 
 /** The category of one failed tool result. */
-export function errorCategory(tool: string, text: string): BenignError | RealError {
+export function errorCategory(tool: string, text: string, command = ''): BenignError | RealError {
   if (tool === 'bash' && /exited with code 143\b/.test(text)) return 'killed'
   if ((tool === 'browser' || tool === 'screenshot') && /ERR_CONNECTION_REFUSED/.test(text)) return 'serverNotUp'
-  if (tool === 'bash' && /exited with code 7\b/.test(text)) return 'serverNotUp'
+  // curl's "failed to connect"; another command exiting 7 is a real failure.
+  if (tool === 'bash' && /exited with code 7\b/.test(text) && /\bcurl\b/.test(command)) return 'serverNotUp'
   if (/Worktree is dirty/.test(text)) return 'dirtyWorktree'
   if (/ENOENT/.test(text)) return 'enoent'
   if (tool === 'bash' && /exited with code \d+/.test(text)) return 'bashExit'
@@ -106,9 +107,10 @@ const BENIGN = new Set<string>(['killed', 'serverNotUp'])
 /** Start and end of a long text: a command's output leads, its exit code ends it. */
 const clip = (text: string) => (text.length > 240 ? `${text.slice(0, 100)} … ${text.slice(-130)}` : text)
 
-/** A bash call that commits. */
-const commits = (call: { name?: string; arguments?: Record<string, unknown> }) =>
-  call.name === 'bash' && /\bgit\b[^\n;&|]*\bcommit\b/.test(String(call.arguments?.command ?? ''))
+/** A bash call that commits: `git commit` (options such as `-C dir` or `-c k=v` between), not `git log --grep=commit`. */
+export const commits = (call: { name?: string; arguments?: Record<string, unknown> }) =>
+  call.name === 'bash' &&
+  /\bgit(?:\s+-[Cc]\s+\S+|\s+--?[\w-]+(?:=\S+)?)*\s+commit\b/.test(String(call.arguments?.command ?? ''))
 
 const textOf = (entry: Entry) => {
   const content = entry.model?.[0]?.content
@@ -214,25 +216,28 @@ export function score(data: Collected, featureWords: Record<string, RegExp>, exp
   for (const [id, entries] of Object.entries(data.histories)) {
     const summary = byId.get(Number(id))
     const role = summary ? roleOf(summary, data.ultimate, coordinatorIds, data.agents?.[Number(id)]) : 'unknown'
+    const commandOf = new Map<string, string>()
     for (const entry of entries) {
+      for (const call of toolCalls(entry) as { id?: string; arguments?: { command?: unknown } }[])
+        if (call.id) commandOf.set(call.id, String(call.arguments?.command ?? ''))
       if (entry.kind === 'watchdog.failure') failures++
       if (entry.kind.startsWith('watchdog.') && /retry|continu/i.test(entry.kind + textOf(entry))) retries++
       const message = entry.model?.[0]
       if (message?.role === 'toolResult' && (message as { isError?: boolean }).isError) {
         const tool = (message as { toolName?: string }).toolName ?? '?'
         const text = resultText(message.content)
-        const category = errorCategory(tool, text)
+        const call = (message as { toolCallId?: string }).toolCallId
+        const category = errorCategory(tool, text, call ? commandOf.get(call) : undefined)
         if (BENIGN.has(category)) benign[category as BenignError] = (benign[category as BenignError] ?? 0) + 1
         else {
           real[category as RealError] = (real[category as RealError] ?? 0) + 1
-          if (realList.length < 50)
-            realList.push({
+          realList.push({
               conversation: Number(id),
               entry: entry.id,
               tool,
               category: category as RealError,
-              text: clip(text.replace(/\s+/g, ' ').trim()),
-            })
+            text: clip(text.replace(/\s+/g, ' ').trim()),
+          })
         }
       }
       if (message?.role === 'assistant' && message.timestamp && toolCalls(entry).some(commits))
@@ -292,15 +297,20 @@ export function score(data: Collected, featureWords: Record<string, RegExp>, exp
     })
   }
   if (expect.landFailedFirst) {
-    // The lander's reports in each submitter's history: a failure other than a merge conflict is a failed check.
-    const failed = Object.values(data.histories)
-      .flat()
-      .flatMap((e) => {
+    // The lander's reports in each submitter's history: a lander check that failed (`check failed twice: <command>`,
+    // as the lander words it), then a later landing of the same submitter.
+    const failed = Object.values(data.histories).flatMap((entries) => {
+      const reports = entries.filter((e) => e.kind === 'workspaces.lander-report')
+      return reports.flatMap((e, i) => {
         const outcome = (e.data as { outcome?: { outcome?: string; reason?: string } } | undefined)?.outcome
-        return e.kind === 'workspaces.lander-report' && outcome?.outcome === 'failed' && !/conflict/i.test(outcome.reason ?? '')
+        const landedLater = reports
+          .slice(i + 1)
+          .some((l) => (l.data as { outcome?: { outcome?: string } }).outcome?.outcome === 'landed')
+        return outcome?.outcome === 'failed' && /^check failed/.test(outcome.reason ?? '') && landedLater
           ? [`#${e.conversationId}: ${outcome.reason}`]
           : []
       })
+    })
     const allLanded = coordinators.length > 0 && coordinators.every((c) => c.landed)
     checks.push({
       name: 'landed after a failed landing check',
