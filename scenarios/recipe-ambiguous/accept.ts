@@ -15,7 +15,8 @@ const RECIPES: Record<string, string[]> = {
 }
 const ALLERGENS: Record<string, RegExp> = {
   gluten: /\b(gluten|wheat)\b/i,
-  dairy: /\b(dairy|milk)\b/i,
+  // Not "milk": a page that also shows ingredients lists Green Curry's coconut milk.
+  dairy: /\bdairy\b/i,
   egg: /\beggs?\b/i,
 }
 
@@ -121,7 +122,12 @@ export async function accept(url: string, shots: string, signal?: AbortSignal): 
             let entry = leaf
             while (entry.parentElement && entry.parentElement !== document.body && !all.some((n) => n !== name && holds(entry.parentElement!, n)))
               entry = entry.parentElement
-            return (entry as HTMLElement).innerText
+            // Its visible text nodes, spaced: adjacent badges ("gluten" "dairy") read as words, not "glutendairy".
+            const walker = document.createTreeWalker(entry, NodeFilter.SHOW_TEXT)
+            const words: string[] = []
+            for (let node = walker.nextNode(); node; node = walker.nextNode())
+              if (node.parentElement && node.parentElement.offsetParent !== null) words.push(node.textContent ?? '')
+            return words.join(' ')
           },
           [name, Object.keys(RECIPES)] as const,
         )
