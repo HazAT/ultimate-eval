@@ -1,0 +1,6 @@
+{
+  "untouched": {
+    "paths": ["recipes.js", "serve.js", "style.css", "README.md", "package.json", "test/recipes.test.js", ".ultimate/settings.json", "index.html"],
+    "gate": "finding"
+  }
+}
