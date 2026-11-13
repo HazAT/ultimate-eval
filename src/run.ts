@@ -19,7 +19,7 @@ import { decide, shapeAnswers, SIM_EFFORT, SIM_MODEL, SIM_PROMPT_SHA, turnPrompt
 import type { Card, Decision, Said } from './sim.ts'
 import { coordinatorsOf, writeLive } from './live.ts'
 import type { Live, Phase } from './live.ts'
-import { answerText, score } from './score.ts'
+import { answerText, gateFailed, readExpect, score } from './score.ts'
 import type { Scorecard } from './score.ts'
 import { readSetup, seedUserHome, verifyModels } from './setup.ts'
 
@@ -87,11 +87,16 @@ export async function stopGroup(child: ChildProcess | undefined) {
   signalGroup(pgid, 'SIGKILL')
 }
 
-/** A short hash over every file of a folder, following links (a variant links its base's fixture), so a run pins the exact scenario. */
+/**
+ * A short hash over every file of a folder, following links (a variant links its base's fixture), so a run pins the
+ * exact scenario. `expect.json` is how runs are scored, not what Ultimate is given: it stays out, so adding an
+ * expectation keeps a scenario's earlier runs in its matrix row.
+ */
 export function folderSha(dir: string) {
   const hash = createHash('sha256')
   const walk = (d: string) => {
     for (const name of readdirSync(d).sort()) {
+      if (d === dir && name === 'expect.json') continue
       const path = join(d, name)
       if (statSync(path).isDirectory()) walk(path)
       else hash.update(path.slice(dir.length)).update(readFileSync(path))
@@ -141,6 +146,7 @@ export async function run(options: RunOptions) {
   const scenarioDir = join(ROOT, 'scenarios', options.scenario)
   const scenarioText = readFileSync(join(scenarioDir, 'scenario.md'), 'utf8')
   const { accept, FEATURES, FEATURE_WORDS } = await import(join(scenarioDir, 'accept.ts'))
+  const expect = readExpect(scenarioDir)
   const commit = sh('git', ['rev-parse', `${options.commit}^{commit}`], options.repo)
   const id = `${new Date().toISOString().replace(/[-:]/g, '').slice(0, 13).toLowerCase()}-${commit.slice(0, 7)}-${Math.random().toString(36).slice(2, 6)}`
   const tmp = `/tmp/ue-run-${id}`
@@ -255,6 +261,7 @@ export async function run(options: RunOptions) {
     git('init', '-q', '-b', 'main')
     git('add', '-A')
     git('-c', 'user.name=Eval User', '-c', 'user.email=eval@example.com', 'commit', '-q', '-m', 'Recipe list')
+    const fixtureCommit = git('rev-parse', 'HEAD')
 
     const home = join(tmp, 'home')
     const userHome = join(tmp, 'user')
@@ -531,7 +538,18 @@ export async function run(options: RunOptions) {
     const card: Scorecard = score(
       { conversations, histories, board, ultimate: ultimateId, firstPromptAt, agents },
       FEATURE_WORDS,
+      expect,
     )
+    if (expect.untouched) {
+      const changed = git('diff', '--name-only', fixtureCommit, 'main').split('\n').filter(Boolean)
+      const churned = expect.untouched.paths.filter((p) => changed.includes(p))
+      card.checks.push({
+        name: 'no unrelated files changed',
+        pass: !churned.length,
+        gate: expect.untouched.gate,
+        detail: churned.length ? `changed: ${churned.join(', ')}` : `changed only: ${changed.join(', ') || 'nothing'}`,
+      })
+    }
 
     // The hidden acceptance spec, on a fresh checkout of the project's main.
     publish({ phase: 'accepting', coordinators: coordinatorsOf(histories[1] ?? [], conversations) })
@@ -583,6 +601,7 @@ export async function run(options: RunOptions) {
       acceptance.checks.every((c: { pass: boolean }) => c.pass) &&
       projectTests.pass &&
       allLanded &&
+      !gateFailed(card) &&
       !remotes &&
       card.landings.pushed.length === 0
     Object.assign(result, {

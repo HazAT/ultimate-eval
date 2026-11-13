@@ -205,6 +205,43 @@ function Scorecard({ r }: { r: Result }) {
           )}
         </Section>
 
+        {card?.checks && card.checks.length > 0 && (
+          <Section
+            aside={(() => {
+              const found = card.checks.filter((c) => c.gate === 'finding' && !c.pass).length
+              return found ? `${found} finding${found === 1 ? '' : 's'}` : 'no findings'
+            })()}
+            title="checks"
+          >
+            <ul className="space-y-0.5 text-[12.5px]">
+              {card.checks.map((c) => (
+                <li className="flex min-w-0 items-start gap-2" key={c.name}>
+                  <span className="pt-1">
+                    {c.pass || c.gate === 'pass' ? (
+                      <Pass ok={c.pass} />
+                    ) : (
+                      <SparklesIcon className="size-3 shrink-0 text-warning" />
+                    )}
+                  </span>
+                  <span className="min-w-0">
+                    <span className={cn(!c.pass && (c.gate === 'pass' ? 'text-error' : 'text-warning'))}>
+                      {c.name}
+                    </span>
+                    <span className="ml-2 font-mono text-[10.5px] text-muted-foreground/70">
+                      {c.gate === 'pass' ? 'required' : 'finding'}
+                    </span>
+                    {c.detail && (
+                      <span className="block truncate font-mono text-[10.5px] text-muted-foreground/70" title={c.detail}>
+                        {c.detail}
+                      </span>
+                    )}
+                  </span>
+                </li>
+              ))}
+            </ul>
+          </Section>
+        )}
+
         {card && (
           <Section
             aside={`${card.landings.count} landing${card.landings.count === 1 ? '' : 's'} · first ${mins(card.timing.firstLandingMin)} · last ${mins(card.timing.lastLandingMin)}`}
@@ -228,6 +265,33 @@ function Scorecard({ r }: { r: Result }) {
               {card.workers.total} workers · {card.plans.coordinatorsWithPlan} with a plan ·{' '}
               {card.plans.tasks} tasks · {card.toolErrors} tool errors · {card.watchdog.failures} watchdog
             </p>
+          </Section>
+        )}
+
+        {card?.toolErrorDetail && (
+          <Section
+            aside={`benign: ${
+              Object.entries(card.toolErrorDetail.benign)
+                .map(([k, n]) => `${n} ${k}`)
+                .join(', ') || 'none'
+            }`}
+            title={`tool errors ${card.toolErrors}`}
+          >
+            {card.toolErrorDetail.list.length ? (
+              <ul className="space-y-1.5 text-[12.5px]">
+                {card.toolErrorDetail.list.map((e) => (
+                  <li className="min-w-0" key={`${e.conversation}-${e.entry}`}>
+                    <span className="block font-mono text-[10.5px] text-muted-foreground/70">
+                      #{e.conversation} · entry {e.entry} · {e.tool} ·{' '}
+                      <span className={cn(e.category !== 'bashExit' && 'text-warning')}>{e.category}</span>
+                    </span>
+                    <span className="line-clamp-2 font-mono text-[11px] text-foreground/80">{e.text}</span>
+                  </li>
+                ))}
+              </ul>
+            ) : (
+              <Note>none beyond the benign ones</Note>
+            )}
           </Section>
         )}
 

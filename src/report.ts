@@ -14,6 +14,9 @@ export type RunResult = {
     coordinators: unknown[]
     workers: { total: number }
     questions?: { multi: number; multiAnswered?: number }
+    /** Real tool errors (before categories, every error). */
+    toolErrors?: number
+    checks?: { name: string; pass: boolean; gate: 'pass' | 'finding'; detail?: string }[]
   }
   sim?: { costUsd: number }
 }
@@ -46,6 +49,9 @@ export type Group = {
   features: Record<string, number>
   /** Runs where Ultimate asked a multi-choice card, and where one was answered. */
   multi: { asked: number; answered: number }
+  /** Runs with a failed `finding` check, and the median count of real tool errors. */
+  withFindings: number
+  medianToolErrors?: number
   failures: { id: string; status: string }[]
 }
 
@@ -75,13 +81,27 @@ export function groups(runs: RunResult[]): Group[] {
         asked: list.filter((r) => (r.scorecard?.questions?.multi ?? 0) > 0).length,
         answered: list.filter((r) => (r.scorecard?.questions?.multiAnswered ?? 0) > 0).length,
       },
+      withFindings: list.filter((r) => r.scorecard?.checks?.some((c) => c.gate === 'finding' && !c.pass)).length,
+      medianToolErrors: median(list.flatMap((r) => (r.scorecard?.toolErrors === undefined ? [] : [r.scorecard.toolErrors]))),
       failures: list.filter((r) => !r.pass).map((r) => ({ id: r.id, status: r.status })),
     }
   })
 }
 
 export function table(runs: RunResult[]) {
-  const rows = [['commit  setup  scenario', 'pass/N', 'median min', 'median $', 'features passing', 'multi asked/answered', 'failures']]
+  const rows = [
+    [
+      'commit  setup  scenario',
+      'pass/N',
+      'median min',
+      'median $',
+      'features passing',
+      'multi asked/answered',
+      'findings',
+      'tool errors',
+      'failures',
+    ],
+  ]
   for (const g of groups(runs)) {
     const n = g.runs.length
     rows.push([
@@ -91,6 +111,8 @@ export function table(runs: RunResult[]) {
       (g.medianCost ?? 0).toFixed(2),
       Object.entries(g.features).map(([f, k]) => `${f} ${k}/${n}`).join(', ') || '-',
       `${g.multi.asked}/${n} ${g.multi.answered}/${n}`,
+      `${g.withFindings}/${n}`,
+      g.medianToolErrors === undefined ? '-' : String(g.medianToolErrors),
       g.failures.map((f) => f.status).join(', ') || '-',
     ])
   }

@@ -3,7 +3,7 @@ import assert from 'node:assert/strict'
 import { applyOps, openQuestions } from '../src/api.ts'
 import type { Entry, Message } from '../src/api.ts'
 import { shapeAnswers } from '../src/sim.ts'
-import { score } from '../src/score.ts'
+import { errorCategory, findings, gateFailed, score } from '../src/score.ts'
 import { groups, median, table } from '../src/report.ts'
 import { coordinatorsOf, writeLive } from '../src/live.ts'
 import type { Live } from '../src/live.ts'
@@ -146,6 +146,101 @@ test('score matches coordinators to features, counts workers, plans, landings an
     { asked: 1, multi: 1, multiAnswered: 1, wait: [30] },
   )
   assert.equal(card.watchdog.failures, 1)
+})
+
+test('tool errors: a killed dev server and a server not up yet are benign, the rest are listed', () => {
+  const cases: [string, string, string][] = [
+    ['bash', '<harness> [error] Command exited with code 143 </harness>', 'killed'],
+    ['browser', 'Error: page.goto: net::ERR_CONNECTION_REFUSED at http://127.0.0.1:8571/', 'serverNotUp'],
+    ['screenshot', 'Error: page.goto: net::ERR_CONNECTION_REFUSED at http://127.0.0.1:8734/x', 'serverNotUp'],
+    ['bash', '000 <harness> [error] Command exited with code 7 </harness>', 'serverNotUp'],
+    ['workspace', '<harness> [error] Worktree is dirty: UU app.js </harness>', 'dirtyWorktree'],
+    ['read', "ENOENT: no such file or directory, open '/tmp/shots/list.png'", 'enoent'],
+    ['bash', 'pass 3 fail 0 <harness> [error] Command exited with code 1 </harness>', 'bashExit'],
+    ['codemode', 'ReferenceError: setTimeout is not defined', 'unknown'],
+    ['browser', 'Error: locator.waitFor: strict mode violation', 'unknown'],
+  ]
+  for (const [tool, text, category] of cases) assert.equal(errorCategory(tool, text), category, text)
+})
+
+test('hard checks: an extra coordinator, the expected card, asked first, a landing that failed a check', () => {
+  const words = { search: /search/i }
+  const toolResult = (id: number, toolName: string, text: string): Entry => ({
+    id,
+    kind: 'pi.tool-result',
+    conversationId: 10,
+    model: [{ role: 'toolResult', toolName, isError: true, content: [{ type: 'text', text }] } as never],
+  })
+  const commitAt = (id: number, at: number): Entry => ({
+    id,
+    kind: 'pi.assistant',
+    conversationId: 10,
+    model: [
+      {
+        role: 'assistant',
+        timestamp: at,
+        content: [{ type: 'toolCall', name: 'bash', arguments: { command: 'git add -A && git commit -qm "Search"' } }],
+      },
+    ],
+  })
+  const report = (id: number, from: number, outcome: object): Entry => ({
+    id,
+    kind: 'workspaces.lander-report',
+    conversationId: from,
+    data: { id: `s${id}`, outcome },
+  })
+  const data = (cardAt: number) => ({
+    ultimate: 2,
+    firstPromptAt: 0,
+    conversations: [
+      { id: 10, busy: false, title: 'Search box' },
+      { id: 11, busy: false, title: 'Add a tab icon (favicon)' },
+    ],
+    histories: {
+      1: [
+        { id: 3, kind: 'lineage.branched', conversationId: 1, data: { branch: 10, intent: 'Search' } },
+        { id: 4, kind: 'lineage.branched', conversationId: 1, data: { branch: 11 } },
+        { id: 5, kind: 'lineage.note', conversationId: 1, data: { from: 10, sha: 'a', source: 'lander' } },
+        { id: 6, kind: 'lineage.note', conversationId: 1, data: { from: 11, sha: 'b', source: 'lander' } },
+      ],
+      10: [
+        toolResult(20, 'bash', 'Command exited with code 143'),
+        toolResult(21, 'workspace', 'Worktree is dirty: UU app.js'),
+        commitAt(22, 120_000),
+        report(23, 10, { outcome: 'failed', reason: 'it conflicts with main in' }),
+        report(24, 10, { outcome: 'failed', reason: 'check failed twice: node scripts/check-docs.js' }),
+        report(25, 10, { outcome: 'landed', sha: 'a' }),
+      ],
+    },
+    board: {
+      messages: [{ id: 1, from: 2, to: 'user' as const, text: 'Which?', at: cardAt, reply: true, state: 'answered', questions: [{ text: 'q', kind: 'choice' as const }] }],
+    },
+  })
+  const expect = {
+    card: { kind: 'multi', gate: 'finding' as const },
+    askedFirst: { gate: 'finding' as const },
+    landFailedFirst: { gate: 'pass' as const },
+  }
+  const card = score(data(60_000), words, expect)
+  const by = Object.fromEntries(card.checks.map((c) => [c.name, c]))
+  assert.equal(by['every coordinator works on a feature']!.pass, false)
+  assert.match(by['every coordinator works on a feature']!.detail!, /#11 Add a tab icon/)
+  assert.equal(by['asked a multi card']!.pass, false)
+  assert.equal(by['asked before the first commit']!.pass, true)
+  assert.equal(by['landed after a failed landing check']!.pass, true)
+  assert.match(by['landed after a failed landing check']!.detail!, /check-docs/)
+  assert.deepEqual(findings(card).map((c) => c.name), ['every coordinator works on a feature', 'asked a multi card'])
+  assert.equal(gateFailed(card), false)
+  assert.equal(card.toolErrors, 1)
+  assert.deepEqual(card.toolErrorDetail.benign, { killed: 1 })
+  assert.deepEqual(card.toolErrorDetail.list.map((e) => [e.conversation, e.entry, e.category]), [[10, 21, 'dirtyWorktree']])
+
+  // Asked only after committing; and with only a conflict failing, the landing check is not met and fails the run.
+  const late = data(180_000)
+  late.histories[10] = late.histories[10]!.filter((e) => e.id !== 24)
+  const lateCard = score(late, words, expect)
+  assert.equal(lateCard.checks.find((c) => c.name === 'asked before the first commit')!.pass, false)
+  assert.equal(gateFailed(lateCard), true)
 })
 
 test('each configured role is checked against what ran: ok, mismatch or not exercised', async () => {

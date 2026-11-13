@@ -131,6 +131,13 @@ export type Result = {
     }
     watchdog: { failures: number; retries: number }
     toolErrors: number
+    /** Results scored before the categories have none. */
+    toolErrorDetail?: {
+      benign: Record<string, number>
+      real: Record<string, number>
+      list: { conversation: number; entry: number; tool: string; category: string; text: string }[]
+    }
+    checks?: { name: string; pass: boolean; gate: 'pass' | 'finding'; detail?: string }[]
   }
 }
 

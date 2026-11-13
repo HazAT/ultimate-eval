@@ -2,6 +2,8 @@
  * The scorecard, from what a run collected over the API: every conversation's summary and history, and the root's
  * Messages log. Pure, so it is tested on fixtures.
  */
+import { existsSync, readFileSync } from 'node:fs'
+import { join } from 'node:path'
 import type { Entry, Message, Summary } from './api.ts'
 
 export type Collected = {
@@ -45,8 +47,68 @@ export type Scorecard = {
     texts: { id: number; from: number | string; kinds: string[]; text: string }[]
   }
   watchdog: { failures: number; retries: number }
+  /** Real tool errors: everything but the known-benign categories. */
   toolErrors: number
+  toolErrorDetail: {
+    benign: Partial<Record<BenignError, number>>
+    real: Partial<Record<RealError, number>>
+    /** Each real error, up to 50. */
+    list: { conversation: number; entry: number; tool: string; category: RealError; text: string }[]
+  }
+  /** Hard checks: the scenario's expectations and the extra-coordinator check. A failed `finding` is recorded only. */
+  checks: Check[]
 }
+
+export type Gate = 'pass' | 'finding'
+export type Check = { name: string; pass: boolean; gate: Gate; detail?: string }
+
+/**
+ * What a scenario expects of a run beyond its hidden spec (`scenarios/<name>/expect.json`), each gated: `pass` fails
+ * the run, `finding` records it.
+ */
+export type Expect = {
+  /** A reply-expected card to the user, with a question of `kind` when given. */
+  card?: { kind?: string; gate: Gate }
+  /** A card to the user before the first commit anywhere. */
+  askedFirst?: { gate: Gate }
+  /** A landing failed on a lander check (not a merge conflict), and everything still landed. */
+  landFailedFirst?: { gate: Gate }
+  /** Project paths unchanged on main against the fixture commit; checked by the runner on the project. */
+  untouched?: { paths: string[]; gate: Gate }
+}
+
+/**
+ * Benign: the agent killing its own dev server (bash exit 143), or a browser or curl (exit 7) reaching for it before
+ * it was up. Real: a dirty worktree (an unresolved merge on submit), a missing file, any other failed command, and
+ * anything else (a refused tool call, a script error).
+ */
+export type BenignError = 'killed' | 'serverNotUp'
+export type RealError = 'dirtyWorktree' | 'enoent' | 'bashExit' | 'unknown'
+
+const resultText = (content: unknown) =>
+  typeof content === 'string'
+    ? content
+    : Array.isArray(content)
+      ? content.filter((c: { type: string }) => c.type === 'text').map((c: { text: string }) => c.text).join('\n')
+      : ''
+
+/** The category of one failed tool result. */
+export function errorCategory(tool: string, text: string): BenignError | RealError {
+  if (tool === 'bash' && /exited with code 143\b/.test(text)) return 'killed'
+  if ((tool === 'browser' || tool === 'screenshot') && /ERR_CONNECTION_REFUSED/.test(text)) return 'serverNotUp'
+  if (tool === 'bash' && /exited with code 7\b/.test(text)) return 'serverNotUp'
+  if (/Worktree is dirty/.test(text)) return 'dirtyWorktree'
+  if (/ENOENT/.test(text)) return 'enoent'
+  if (tool === 'bash' && /exited with code \d+/.test(text)) return 'bashExit'
+  return 'unknown'
+}
+const BENIGN = new Set<string>(['killed', 'serverNotUp'])
+/** Start and end of a long text: a command's output leads, its exit code ends it. */
+const clip = (text: string) => (text.length > 240 ? `${text.slice(0, 100)} … ${text.slice(-130)}` : text)
+
+/** A bash call that commits. */
+const commits = (call: { name?: string; arguments?: Record<string, unknown> }) =>
+  call.name === 'bash' && /\bgit\b[^\n;&|]*\bcommit\b/.test(String(call.arguments?.command ?? ''))
 
 const textOf = (entry: Entry) => {
   const content = entry.model?.[0]?.content
@@ -92,7 +154,7 @@ export function roleOf(c: Summary, ultimate: number, coordinators: Set<number>, 
   return agent ?? 'unknown'
 }
 
-export function score(data: Collected, featureWords: Record<string, RegExp>): Scorecard {
+export function score(data: Collected, featureWords: Record<string, RegExp>, expect: Expect = {}): Scorecard {
   const minutes = (at: number) => Math.round(((at - data.firstPromptAt) / 60000) * 10) / 10
   const root = data.histories[1] ?? []
   const branched = root.filter((e) => e.kind === 'lineage.branched')
@@ -145,7 +207,10 @@ export function score(data: Collected, featureWords: Record<string, RegExp>): Sc
   const modelsByRole: Record<string, Set<string>> = {}
   let failures = 0
   let retries = 0
-  let toolErrors = 0
+  const benign: Scorecard['toolErrorDetail']['benign'] = {}
+  const real: Scorecard['toolErrorDetail']['real'] = {}
+  const realList: Scorecard['toolErrorDetail']['list'] = []
+  let firstCommitAt = Infinity
   for (const [id, entries] of Object.entries(data.histories)) {
     const summary = byId.get(Number(id))
     const role = summary ? roleOf(summary, data.ultimate, coordinatorIds, data.agents?.[Number(id)]) : 'unknown'
@@ -153,7 +218,25 @@ export function score(data: Collected, featureWords: Record<string, RegExp>): Sc
       if (entry.kind === 'watchdog.failure') failures++
       if (entry.kind.startsWith('watchdog.') && /retry|continu/i.test(entry.kind + textOf(entry))) retries++
       const message = entry.model?.[0]
-      if (message?.role === 'toolResult' && (message as { isError?: boolean }).isError) toolErrors++
+      if (message?.role === 'toolResult' && (message as { isError?: boolean }).isError) {
+        const tool = (message as { toolName?: string }).toolName ?? '?'
+        const text = resultText(message.content)
+        const category = errorCategory(tool, text)
+        if (BENIGN.has(category)) benign[category as BenignError] = (benign[category as BenignError] ?? 0) + 1
+        else {
+          real[category as RealError] = (real[category as RealError] ?? 0) + 1
+          if (realList.length < 50)
+            realList.push({
+              conversation: Number(id),
+              entry: entry.id,
+              tool,
+              category: category as RealError,
+              text: clip(text.replace(/\s+/g, ' ').trim()),
+            })
+        }
+      }
+      if (message?.role === 'assistant' && message.timestamp && toolCalls(entry).some(commits))
+        firstCommitAt = Math.min(firstCommitAt, message.timestamp)
       if (message?.role !== 'assistant' || !message.usage) continue
       const name = `${message.provider}/${message.model}`
       ;(modelsByRole[role] ??= new Set()).add(name)
@@ -179,6 +262,54 @@ export function score(data: Collected, featureWords: Record<string, RegExp>): Sc
   )
 
   const landingTimes = notes.map((n) => n.model?.[0]?.timestamp ?? 0).filter(Boolean)
+
+  const checks: Check[] = []
+  const extra = coordinators.filter((c) => !c.features.length)
+  checks.push({
+    name: 'every coordinator works on a feature',
+    pass: !extra.length,
+    gate: 'finding',
+    ...(extra.length ? { detail: extra.map((c) => `#${c.id} ${c.intent ?? c.title ?? ''}`.trim()).join('; ') } : {}),
+  })
+  if (expect.card) {
+    const { kind } = expect.card
+    const asked = toUser.filter((m) => !kind || m.questions?.some((q) => q.kind === kind))
+    checks.push({
+      name: kind ? `asked a ${kind} card` : 'asked a card',
+      pass: asked.length > 0,
+      gate: expect.card.gate,
+      detail: asked.length ? `card ${asked[0]!.id}` : `${toUser.length} cards, none ${kind ?? ''}`.trim(),
+    })
+  }
+  if (expect.askedFirst) {
+    const firstAsk = Math.min(...toUser.map((m) => m.at))
+    const firstChange = Math.min(firstCommitAt, ...landingTimes)
+    checks.push({
+      name: 'asked before the first commit',
+      pass: firstAsk < firstChange,
+      gate: expect.askedFirst.gate,
+      detail: `first card ${Number.isFinite(firstAsk) ? `at ${minutes(firstAsk)} min` : 'never'}, first commit ${Number.isFinite(firstChange) ? `at ${minutes(firstChange)} min` : 'never'}`,
+    })
+  }
+  if (expect.landFailedFirst) {
+    // The lander's reports in each submitter's history: a failure other than a merge conflict is a failed check.
+    const failed = Object.values(data.histories)
+      .flat()
+      .flatMap((e) => {
+        const outcome = (e.data as { outcome?: { outcome?: string; reason?: string } } | undefined)?.outcome
+        return e.kind === 'workspaces.lander-report' && outcome?.outcome === 'failed' && !/conflict/i.test(outcome.reason ?? '')
+          ? [`#${e.conversationId}: ${outcome.reason}`]
+          : []
+      })
+    const allLanded = coordinators.length > 0 && coordinators.every((c) => c.landed)
+    checks.push({
+      name: 'landed after a failed landing check',
+      pass: failed.length > 0 && allLanded,
+      gate: expect.landFailedFirst.gate,
+      detail: failed.length ? failed.slice(0, 3).join('; ') : 'no landing failed a check',
+    })
+  }
+
   return {
     coordinators,
     featuresWithCoordinator,
@@ -220,9 +351,23 @@ export function score(data: Collected, featureWords: Record<string, RegExp>): Sc
       })),
     },
     watchdog: { failures, retries },
-    toolErrors,
+    toolErrors: Object.values(real).reduce((a, b) => a + b, 0),
+    toolErrorDetail: { benign, real, list: realList },
+    checks,
   }
 }
+
+/** A scenario's expectations, `{}` without an `expect.json`. */
+export const readExpect = (scenarioDir: string): Expect => {
+  const path = join(scenarioDir, 'expect.json')
+  return existsSync(path) ? (JSON.parse(readFileSync(path, 'utf8')) as Expect) : {}
+}
+
+/** A failed check gated `pass`: it fails the run. */
+export const gateFailed = (card: Pick<Scorecard, 'checks'>) => card.checks.some((c) => c.gate === 'pass' && !c.pass)
+
+/** Failed checks gated `finding`: what a person should look at, though the run may pass. */
+export const findings = (card: Pick<Scorecard, 'checks'>) => card.checks.filter((c) => c.gate === 'finding' && !c.pass)
 
 /** The text of an assistant answer, for transcripts. */
 export const answerText = textOf
