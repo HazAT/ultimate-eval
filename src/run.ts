@@ -13,7 +13,7 @@ import { createServer } from 'node:net'
 import { DatabaseSync } from 'node:sqlite'
 import { homedir } from 'node:os'
 import { join, resolve } from 'node:path'
-import { Instance, openQuestions } from './api.ts'
+import { heardAnswers, Instance, openQuestions } from './api.ts'
 import type { Message } from './api.ts'
 import { decide, shapeAnswers, SIM_EFFORT, SIM_MODEL, SIM_PROMPT_SHA, turnPrompt } from './sim.ts'
 import type { Card, Decision, Said } from './sim.ts'
@@ -404,17 +404,15 @@ export async function run(options: RunOptions) {
         news = true
         log(`card ${message.id} from #${message.from}: ${message.text.slice(0, 120).replace(/\n/g, ' ')}`)
       }
+      const busy = !!instance.conversations.find((c) => c.id === ultimateId)?.busy
       const entries = await instance.history(ultimateId).catch(() => [])
-      for (const entry of entries) {
-        if (entry.id <= seenEntry) continue
-        seenEntry = entry.id
-        const m = entry.model?.[0]
-        const text = answerText(entry).trim()
-        if (m?.role === 'assistant' && m.stopReason === 'stop' && text && !shown.has(text)) {
-          said.push({ at: m.timestamp ?? now, who: 'ultimate', text })
-          news = true
-          log(`ultimate: ${text.slice(0, 160).replace(/\n/g, ' ')}`)
-        }
+      const heard = heardAnswers(entries, seenEntry, instance.doc(1, 'board'), ultimateId, busy, answerText)
+      seenEntry = heard.seen
+      for (const { at, text } of heard.answers) {
+        if (shown.has(text)) continue
+        said.push({ at: at ?? now, who: 'ultimate', text })
+        news = true
+        log(`ultimate: ${text.slice(0, 160).replace(/\n/g, ' ')}`)
       }
       if (news) lastNews = now
 

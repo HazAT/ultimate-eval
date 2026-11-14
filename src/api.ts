@@ -56,6 +56,8 @@ export type Message = {
   state: string
   /** The message this one answers. */
   re?: number
+  /** The sender's answer entry this message carried down to a branch: an answer the user never sees. */
+  routed?: number
   questions?: Question[]
 }
 
@@ -112,6 +114,37 @@ export function applyOps(value: unknown, ops: readonly Op[]): unknown {
 /** Open questions to the user: reply-expected messages to `user` that are delivered and unanswered. */
 export const openQuestions = (board: { messages?: Message[] } | undefined) =>
   (board?.messages ?? []).filter((m) => m.to === 'user' && m.reply && m.state === 'delivered')
+
+/**
+ * @ultimate's final answers the user sees, among its `entries` after `seen`: assistant `stop` answers, except those the
+ * board routed one-way down to a branch (the UI folds them out of the user's view). The routed record lands about
+ * 100 ms after the entry, so while @ultimate (`ultimate`) is `busy` its newest entry waits for the next pass. Returns
+ * the answers and the new `seen`.
+ */
+export function heardAnswers(
+  entries: Entry[],
+  seen: number,
+  board: { messages?: Message[] } | undefined,
+  ultimate: number,
+  busy: boolean,
+  textOf: (entry: Entry) => string,
+) {
+  const routed = new Set(
+    (board?.messages ?? []).flatMap((m) => (m.from === ultimate && m.routed !== undefined ? [m.routed] : [])),
+  )
+  const last = busy ? entries.at(-1)?.id : undefined
+  const answers: { at?: number; text: string }[] = []
+  for (const entry of entries) {
+    if (entry.id <= seen) continue
+    if (entry.id === last) break
+    seen = entry.id
+    const m = entry.model?.[0]
+    const text = textOf(entry).trim()
+    if (m?.role === 'assistant' && m.stopReason === 'stop' && text && !routed.has(entry.id))
+      answers.push({ at: m.timestamp, text })
+  }
+  return { answers, seen }
+}
 
 export class Instance {
   readonly base: string

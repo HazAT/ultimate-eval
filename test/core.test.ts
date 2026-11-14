@@ -1,6 +1,6 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { applyOps, openQuestions } from '../src/api.ts'
+import { applyOps, heardAnswers, openQuestions } from '../src/api.ts'
 import type { Entry, Message } from '../src/api.ts'
 import { shapeAnswers } from '../src/sim.ts'
 import { commits, errorCategory, findings, gateFailed, score } from '../src/score.ts'
@@ -35,6 +35,29 @@ test('open questions are delivered, reply-expected messages to the user', () => 
     messages: [m({ id: 1 }), m({ id: 2, state: 'answered' }), m({ id: 3, reply: false }), m({ id: 4, to: 7 })],
   })
   assert.deepEqual(open.map((x) => x.id), [1])
+})
+
+test('the user hears @ultimate answers, not those routed to a branch, and waits for the newest while busy', () => {
+  const answer = (id: number, text: string): Entry => ({
+    id,
+    kind: 'message',
+    conversationId: 40,
+    model: [{ role: 'assistant', stopReason: 'stop', content: [{ type: 'text', text }] }],
+  })
+  const text = (e: Entry) => (e.model![0]!.content as { text: string }[])[0]!.text
+  const msg = { id: 3, from: 40, to: 96, text: '', at: 0, reply: false, state: 'delivered' }
+  const entries = [answer(140, 'I started branch #96'), answer(149, 'Ask the user. My picks: 1a')]
+  // Busy, and the routed record not in yet: 149 waits.
+  const first = heardAnswers(entries, 0, { messages: [] }, 40, true, text)
+  assert.deepEqual(first.answers.map((a) => a.text), ['I started branch #96'])
+  assert.equal(first.seen, 140)
+  // Next pass: the board routed 149 down to #96, so the user never hears it.
+  const board = { messages: [{ ...msg, routed: 149 }] }
+  const second = heardAnswers(entries, first.seen, board, 40, false, text)
+  assert.deepEqual(second.answers, [])
+  assert.equal(second.seen, 149)
+  // Another sender's routed id is not @ultimate's.
+  assert.equal(heardAnswers(entries, 140, { messages: [{ ...msg, from: 96, routed: 149 }] }, 40, false, text).answers.length, 1)
 })
 
 test('a multi answer goes as a list, or joined for a commit before ce22290', () => {
