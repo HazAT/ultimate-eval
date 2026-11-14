@@ -90,7 +90,7 @@ hidden spec, its feature map and the words that match coordinators to features).
 | `recipe-v2` | three features in parallel | none |
 | `recipe-v2-pick` | the same, picked from a multi card | `card multi` (finding) |
 | `recipe-bug` | search and favourites built, with two planted bugs reported as symptoms | `untouched` (finding) |
-| `recipe-land-fail` | recipe-v2's goal, with a lander-only check that every top-level script is listed in the README | `landFailedFirst` (pass) |
+| `recipe-land-fail` | recipe-v2's goal, with a lander-only size budget (the site's scripts ≤ 90 non-empty lines). Each feature fits alone (5–75 lines in earlier runs); the merged three of a typical build (~150) do not, so a later landing fails and must be slimmed. A first version (every new script listed in the README) never failed: coordinators read the lander's checks and complied | `landFailedFirst` (pass) |
 | `recipe-ambiguous` | "make the site nicer for people with allergies"; the answers make it allergen tags plus a filter | `card`, `askedFirst` (findings) |
 
 A variant changes only the card: `recipe-v2-pick` links `fixture` to recipe-v2's and re-exports its `accept.ts`, and

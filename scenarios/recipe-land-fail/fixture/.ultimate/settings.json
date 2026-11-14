@@ -1,1 +1,1 @@
-{ "lander": { "checks": [{ "command": "npm test", "timeout": 60 }, { "command": "node scripts/check-docs.js", "timeout": 60 }] } }
+{ "lander": { "checks": [{ "command": "npm test", "timeout": 60 }, { "command": "node scripts/check-size.js", "timeout": 60 }] } }
