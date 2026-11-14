@@ -1,0 +1,191 @@
+{
+  "id": "20261113t0117-9077c67-q0di",
+  "pins": {
+    "ultimateCommit": "9077c67f78f6dd2caa938010d66a86607d85c645",
+    "scenario": "recipe-v2-pick",
+    "scenarioSha": "fcc3af641d82",
+    "setup": "today",
+    "setupSha": "a7fbce89e1e6",
+    "families": {
+      "default": {
+        "model": "claude-code/claude-opus-5-5",
+        "thinking": "xhigh"
+      },
+      "fast": {
+        "model": "openai-codex/gpt-6.1-sol",
+        "thinking": "medium"
+      },
+      "tiny": {
+        "model": "openai-codex/gpt-6-luna",
+        "thinking": "low"
+      },
+      "review": {
+        "model": "openai-codex/gpt-6-astra",
+        "thinking": "high"
+      }
+    },
+    "roles": {
+      "ultimate": "default",
+      "coordinator": "default",
+      "worker": "fast"
+    },
+    "simModel": "claude-code/claude-opus-5-5",
+    "simEffort": "low",
+    "simPromptSha": "8a0253cc7686",
+    "evalCommit": "15a24c6f27481591f000bf0653ad31f60e74a851"
+  },
+  "pass": true,
+  "status": "done",
+  "minutes": 5.8,
+  "startupSec": 10,
+  "costUsd": 4.57,
+  "features": {
+    "search": true,
+    "detail": true,
+    "favourites": true
+  },
+  "acceptance": [
+    {
+      "name": "page loads with all recipes",
+      "pass": true
+    },
+    {
+      "name": "search filters by name, ignoring case",
+      "pass": true
+    },
+    {
+      "name": "clicking a recipe opens its page at its own address",
+      "pass": true
+    },
+    {
+      "name": "a recipe address survives reload and opens directly",
+      "pass": true
+    },
+    {
+      "name": "a recipe page links back to the list",
+      "pass": true
+    },
+    {
+      "name": "favourites toggle, count in a badge and survive reload",
+      "pass": true
+    },
+    {
+      "name": "no console errors",
+      "pass": true
+    }
+  ],
+  "projectTests": {
+    "pass": true
+  },
+  "allLanded": true,
+  "noRemote": true,
+  "models": {
+    "ultimate": {
+      "expected": "claude-code/claude-opus-5-5",
+      "ran": [
+        "claude-code/claude-opus-5-5"
+      ],
+      "status": "ok"
+    },
+    "coordinator": {
+      "expected": "claude-code/claude-opus-5-5",
+      "ran": [
+        "claude-code/claude-opus-5-5"
+      ],
+      "status": "ok"
+    },
+    "worker": {
+      "expected": "openai-codex/gpt-6.1-sol",
+      "ran": [],
+      "status": "not exercised"
+    }
+  },
+  "answerShape": "joined",
+  "sim": {
+    "calls": 19,
+    "costUsd": 0.73,
+    "improvised": 1,
+    "nudges": 0,
+    "refusedAnswers": 0
+  },
+  "scorecard": {
+    "coordinators": {
+      "started": 3,
+      "landed": 3
+    },
+    "workers": {
+      "total": 4
+    },
+    "plans": {
+      "coordinatorsWithPlan": 3,
+      "epics": 3,
+      "tasks": 0
+    },
+    "landings": {
+      "count": 3,
+      "pushed": 0
+    },
+    "timing": {
+      "firstLandingMin": 2.4,
+      "lastLandingMin": 5.4
+    },
+    "usage": {
+      "byModel": {
+        "claude-code/claude-opus-5-5": {
+          "calls": 94,
+          "input": 230,
+          "output": 44458,
+          "cacheRead": 3114524,
+          "cacheWrite": 197852,
+          "costUsd": 3.0958008000000015
+        },
+        "openai-codex/gpt-6-astra": {
+          "calls": 16,
+          "input": 59565,
+          "output": 1855,
+          "cacheRead": 58624,
+          "cacheWrite": 0,
+          "costUsd": 0.7470240000000001
+        }
+      },
+      "totalCostUsd": 3.84,
+      "cacheHitRate": 0.925
+    },
+    "questions": {
+      "asked": 4,
+      "withCards": 4,
+      "multi": 1,
+      "multiAnswered": 1,
+      "answered": 4,
+      "waitSec": [
+        4,
+        8,
+        7,
+        4
+      ]
+    },
+    "watchdog": {
+      "failures": 0,
+      "retries": 0
+    },
+    "toolErrors": 0,
+    "toolErrorDetail": {
+      "real": {},
+      "benign": {
+        "killed": 5
+      }
+    },
+    "checks": [
+      {
+        "name": "every coordinator works on a feature",
+        "pass": true,
+        "gate": "finding"
+      },
+      {
+        "name": "asked a multi card",
+        "pass": true,
+        "gate": "finding"
+      }
+    ]
+  }
+}

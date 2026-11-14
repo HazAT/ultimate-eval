@@ -12,7 +12,8 @@ this project's #119.
 ```bash
 pnpm install
 pnpm eval run --commit <sha|main> [--setup setups/today.json] [--scenario recipe-v2] [--repeat N] [--keep]
-pnpm eval report      # passes/N, median minutes and cost per commit × setup × scenario
+pnpm eval report [--from results]   # passes/N, median minutes and cost per commit × setup × scenario
+pnpm eval export      # results/<id>.json: the cleaned-up, published result of each finished run
 pnpm eval rescore [id…]   # rebuild finished runs' scorecards from what they stored (new checks reach old runs)
 pnpm check && pnpm test
 ```
@@ -44,7 +45,7 @@ Runs go one after another; each spends real subscription quota (estimate: $3–1
    project) on a fresh clone of the project's `main`, with screenshots.
 9. Deletes `/tmp/ue-run-<id>` and Claude Code's session folders for it under `~/.claude/projects/` (unless `--keep`).
 
-## Results (`runs/<id>/`, gitignored)
+## Local results (`runs/<id>/`, gitignored)
 
 - `result.json`: pins (`ultimateCommit`, `scenarioSha`, `setup`/`setupSha`, families, roles, sim model and
   `simPromptSha`), `pass`, `status`, `failure`, `minutes`, `features`, `acceptance`, `projectTests`, `noRemote`,
@@ -78,6 +79,24 @@ pass, every coordinator landed (a lander note with a commit; ordinary notes do n
 measured, not required.
 
 Not verified: the thinking level that ran (no API exposes it); `models` checks the model only.
+
+## Published results (`results/<id>.json`, tracked)
+
+`pnpm eval export` (also run at the end of every `pnpm eval run`) writes one cleaned-up file per finished run;
+cancelled and still-running runs are skipped. Each field is copied by name (`src/export.ts`, an allowlist):
+
+- pins: Ultimate and eval commits, scenario and setup with their shas, families, roles, sim model, effort and prompt sha;
+- `pass`, `status`, `minutes`, `startupSec`, total `costUsd`, and on failure its `reason`, `atMin` and where it
+  stood as counts only (busy conversations, open questions, minutes since progress);
+- features, acceptance checks, hard checks (name, pass, gate), project tests, `allLanded`, `noRemote`, models per role;
+- scorecard numbers: coordinators started and landed, workers, plans, landings and pushes, timing, tokens and cost
+  per model, cache hit rate, questions (asked, cards, multi asked and answered, wait seconds), watchdog failures and
+  retries, tool errors by category; the simulated user's calls, cost, improvised answers, nudges and refusals.
+
+Everything else stays in `runs/`: transcripts, `sim.json`, question texts, conversation titles and intents, check and
+failure details, the main log, screenshots and the home. Before writing anything, the export scans its output and
+refuses every file if one contains `@`, `/home/`, a word starting with `tail`, `.ts.net`, `127.0.0.1`, `localhost` or
+an email-like string. `pnpm eval report --from results` rebuilds the matrix from the published files.
 
 ## Scenarios
 

@@ -1,13 +1,15 @@
 /**
  * pnpm eval run --commit <sha> [--setup setups/today.json] [--scenario recipe-v2] [--repeat N] [--repo PATH] [--keep]
- * pnpm eval report
+ * pnpm eval report [--from results]   the matrix from runs/, or from the published results/
+ * pnpm eval export   write results/<id>.json, the cleaned-up public result of every finished run
  * pnpm eval rescore [run id…]   rebuild scorecards of finished runs from what they stored
  */
 import { homedir } from 'node:os'
 import { join, resolve } from 'node:path'
 import { parseArgs } from 'node:util'
 import { readdirSync } from 'node:fs'
-import { readRuns, table } from './report.ts'
+import { exportResults } from './export.ts'
+import { readPublished, readRuns, table } from './report.ts'
 import { rescore } from './rescore.ts'
 import { ROOT, run } from './run.ts'
 import { findings } from './score.ts'
@@ -20,6 +22,7 @@ const { values, positionals } = parseArgs({
     repeat: { type: 'string', default: '1' },
     repo: { type: 'string', default: join(homedir(), 'Projects/ultimate') },
     keep: { type: 'boolean', default: false },
+    from: { type: 'string', default: 'runs' },
   },
   allowPositionals: true,
 })
@@ -41,8 +44,13 @@ if (command === 'run') {
     if (result.status === 'cancelled') break
   }
   console.log(`\n${table(readRuns(join(ROOT, 'runs')))}`)
-} else if (command === 'report') console.log(table(readRuns(join(ROOT, 'runs'))))
-else if (command === 'rescore') {
+  console.log(`\nexported ${exportResults(join(ROOT, 'runs'), join(ROOT, 'results'))} results to results/`)
+} else if (command === 'report') {
+  if (values.from !== 'runs' && values.from !== 'results') throw new Error('--from must be runs or results')
+  console.log(table(values.from === 'results' ? readPublished(join(ROOT, 'results')) : readRuns(join(ROOT, 'runs'))))
+} else if (command === 'export') {
+  console.log(`exported ${exportResults(join(ROOT, 'runs'), join(ROOT, 'results'))} results to results/`)
+} else if (command === 'rescore') {
   const dir = join(ROOT, 'runs')
   const ids = positionals.length > 1 ? positionals.slice(1) : readdirSync(dir).filter((n) => /^\d{8}t/.test(n))
   for (const id of ids) {
@@ -59,7 +67,7 @@ else if (command === 'rescore') {
   }
 } else {
   console.error(
-    'Usage: pnpm eval run --commit <sha> [--setup FILE] [--scenario NAME] [--repeat N] [--keep] | pnpm eval report | pnpm eval rescore [id…]',
+    'Usage: pnpm eval run --commit <sha> [--setup FILE] [--scenario NAME] [--repeat N] [--keep] | pnpm eval report [--from results] | pnpm eval export | pnpm eval rescore [id…]',
   )
   process.exit(1)
 }

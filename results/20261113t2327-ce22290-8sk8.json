@@ -1,0 +1,167 @@
+{
+  "id": "20261113t2327-ce22290-8sk8",
+  "pins": {
+    "ultimateCommit": "ce22290c6ea5cabf756825d18de5941a39a7f4ba",
+    "scenario": "recipe-bug",
+    "scenarioSha": "68444521b304",
+    "setup": "today",
+    "setupSha": "a7fbce89e1e6",
+    "families": {
+      "default": {
+        "model": "claude-code/claude-opus-5-5",
+        "thinking": "xhigh"
+      },
+      "fast": {
+        "model": "openai-codex/gpt-6.1-sol",
+        "thinking": "medium"
+      },
+      "tiny": {
+        "model": "openai-codex/gpt-6-luna",
+        "thinking": "low"
+      },
+      "review": {
+        "model": "openai-codex/gpt-6-astra",
+        "thinking": "high"
+      }
+    },
+    "roles": {
+      "ultimate": "default",
+      "coordinator": "default",
+      "worker": "fast"
+    },
+    "simModel": "claude-code/claude-opus-5-5",
+    "simEffort": "low",
+    "simPromptSha": "8a0253cc7686",
+    "evalCommit": "dfdf33ddefd67b5c575493fc299a335d7a1e30be"
+  },
+  "pass": true,
+  "status": "done",
+  "minutes": 1.2,
+  "startupSec": 10,
+  "costUsd": 0.62,
+  "features": {
+    "search": true,
+    "favourites": true
+  },
+  "acceptance": [
+    {
+      "name": "page loads with all recipes",
+      "pass": true
+    },
+    {
+      "name": "search filters by name, ignoring case",
+      "pass": true
+    },
+    {
+      "name": "favourites toggle, count in a badge and survive reload",
+      "pass": true
+    },
+    {
+      "name": "no console errors",
+      "pass": true
+    }
+  ],
+  "projectTests": {
+    "pass": true
+  },
+  "allLanded": true,
+  "noRemote": true,
+  "models": {
+    "ultimate": {
+      "expected": "claude-code/claude-opus-5-5",
+      "ran": [
+        "claude-code/claude-opus-5-5"
+      ],
+      "status": "ok"
+    },
+    "coordinator": {
+      "expected": "claude-code/claude-opus-5-5",
+      "ran": [
+        "claude-code/claude-opus-5-5"
+      ],
+      "status": "ok"
+    },
+    "worker": {
+      "expected": "openai-codex/gpt-6.1-sol",
+      "ran": [],
+      "status": "not exercised"
+    }
+  },
+  "answerShape": "list",
+  "sim": {
+    "calls": 3,
+    "costUsd": 0.06,
+    "improvised": 0,
+    "nudges": 0,
+    "refusedAnswers": 0
+  },
+  "scorecard": {
+    "coordinators": {
+      "started": 1,
+      "landed": 1
+    },
+    "workers": {
+      "total": 0
+    },
+    "plans": {
+      "coordinatorsWithPlan": 0,
+      "epics": 0,
+      "tasks": 0
+    },
+    "landings": {
+      "count": 1,
+      "pushed": 0
+    },
+    "timing": {
+      "firstLandingMin": 0.8,
+      "lastLandingMin": 0.8
+    },
+    "usage": {
+      "byModel": {
+        "claude-code/claude-opus-5-5": {
+          "calls": 14,
+          "input": 30,
+          "output": 4591,
+          "cacheRead": 276585,
+          "cacheWrite": 51670,
+          "costUsd": 0.5606170000000001
+        }
+      },
+      "totalCostUsd": 0.56,
+      "cacheHitRate": 0.843
+    },
+    "questions": {
+      "asked": 0,
+      "withCards": 0,
+      "multi": 0,
+      "multiAnswered": 0,
+      "answered": 0,
+      "waitSec": []
+    },
+    "watchdog": {
+      "failures": 0,
+      "retries": 0
+    },
+    "toolErrors": 1,
+    "toolErrorDetail": {
+      "real": {
+        "bashExit": 1
+      },
+      "benign": {
+        "killed": 1
+      }
+    },
+    "checks": [
+      {
+        "name": "every coordinator works on a feature",
+        "pass": true,
+        "gate": "finding"
+      },
+      {
+        "name": "no unrelated files changed",
+        "pass": true,
+        "gate": "finding"
+      }
+    ]
+  }
+}

@@ -4,10 +4,11 @@ import { applyOps, openQuestions } from '../src/api.ts'
 import type { Entry, Message } from '../src/api.ts'
 import { shapeAnswers } from '../src/sim.ts'
 import { commits, errorCategory, findings, gateFailed, score } from '../src/score.ts'
-import { groups, median, table } from '../src/report.ts'
+import { groups, median, readPublished, table } from '../src/report.ts'
+import { exportResults, scan } from '../src/export.ts'
 import { coordinatorsOf, writeLive } from '../src/live.ts'
 import type { Live } from '../src/live.ts'
-import { existsSync, mkdtempSync, readFileSync } from 'node:fs'
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import type { RunResult } from '../src/report.ts'
@@ -347,4 +348,64 @@ test('live.json is replaced whole, keeps the last turns, and knows which coordin
   assert.equal(read.said[0]!.text.length, 600)
   assert.equal(live.said.length, 12)
   assert.equal(existsSync(`${path}.tmp`), false)
+})
+
+test('export publishes only allowlisted fields of finished runs, and the scan refuses leaks', () => {
+  const runs = mkdtempSync(join(tmpdir(), 'ue-export-'))
+  const results = join(runs, 'out')
+  const raw = {
+    id: 'r1',
+    pins: { ultimateCommit: 'c0ffee', scenario: 'recipe-v2', scenarioSha: 'aa', setup: 'today', setupSha: 'bb', families: { default: { model: 'm', thinking: 'high', host: 'box.tail1234.ts.net' } }, roles: { worker: 'default' }, simModel: 'm', simPromptSha: 'cc', repo: '/home/someone/Projects/ultimate' },
+    pass: false,
+    status: 'hang',
+    finishedAt: 'x',
+    failure: { reason: 'hang', atMin: 12, detail: 'Error at /home/someone/x.ts', stuck: { busy: [{ id: 4, title: 'Ask someone@example.com' }], open: [{ text: 'which colour?' }], lastSaid: 'blue', lastProgressMin: 10 } },
+    minutes: 12,
+    features: { detail: true },
+    acceptance: [{ name: 'opens a recipe', pass: true, detail: 'http://127.0.0.1:4000/recipes/1' }],
+    mainLog: ['abc Add search'],
+    sim: { calls: 3, costUsd: 0.1, improvised: 1, nudges: 0, refusedAnswers: 0 },
+    scorecard: {
+      coordinators: [{ id: 5, title: 'Secret title', landed: true }, { id: 6, title: 'Other', landed: false }],
+      workers: { total: 2, byCoordinator: { 5: [7] } },
+      plans: { coordinatorsWithPlan: 1, epics: 1, tasks: 2 },
+      landings: { count: 1, shas: ['abc'], pushed: [] },
+      usage: { byModel: { m: { calls: 1, costUsd: 1 } }, totalCostUsd: 1, cacheHitRate: 0.9 },
+      questions: { asked: 1, multi: 1, multiAnswered: 1, waitSec: [30], texts: ['Which colour, Daniel?'] },
+      watchdog: { failures: 0, retries: 1 },
+      toolErrors: 1,
+      toolErrorDetail: { real: { bashExit: 1 }, benign: {}, list: [{ text: 'cat /home/someone/.env' }] },
+      checks: [{ name: 'asked a card', pass: true, gate: 'finding', detail: 'message 3: Which colour?' }],
+    },
+  }
+  const write = (id: string, r: object) => {
+    mkdirSync(join(runs, id), { recursive: true })
+    writeFileSync(join(runs, id, 'result.json'), JSON.stringify(r))
+  }
+  write('r1', raw)
+  write('r2', { ...raw, id: 'r2', status: 'cancelled' })
+  write('r3', { ...raw, id: 'r3', finishedAt: undefined })
+  mkdirSync(join(runs, 'r4'))
+  assert.equal(exportResults(runs, results), 1)
+  assert.deepEqual(readdirSync(results), ['r1.json'])
+  const text = readFileSync(join(results, 'r1.json'), 'utf8')
+  assert.deepEqual(scan(text), [])
+  for (const leak of ['Secret', 'colour', 'Daniel', 'blue', 'Add search', 'byCoordinator', 'shas', 'texts']) assert.ok(!text.includes(leak), leak)
+  const out = JSON.parse(text)
+  assert.deepEqual(out.failure, { reason: 'hang', atMin: 12, stuck: { busy: 1, open: 1, lastProgressMin: 10 } })
+  assert.deepEqual(out.scorecard.coordinators, { started: 2, landed: 1 })
+  assert.deepEqual(out.scorecard.questions.waitSec, [30])
+  assert.deepEqual(out.acceptance, [{ name: 'opens a recipe', pass: true }])
+  assert.match(table(readPublished(results)), /c0ffee  today  recipe-v2@aa  0\/1/)
+
+  // The scan catches what an allowlisted field could still carry, and a refused export writes nothing.
+  assert.deepEqual(scan('a@b.co'), ['@', 'email'])
+  assert.deepEqual(scan('ops (at) example.org'), ['email'])
+  assert.deepEqual(scan('host.tail1234.ts.net'), ['tail', '.ts.net'])
+  assert.deepEqual(scan('/home/x http://localhost:1 127.0.0.1'), ['/home/', '127.0.0.1', 'localhost'])
+  assert.deepEqual(scan('{"detail": true}'), [])
+  const fresh = join(runs, 'refused')
+  write('r1', { ...raw, acceptance: [{ name: 'mail ops@example.com', pass: true }] })
+  assert.throws(() => exportResults(runs, fresh), /r1\.json: @, email/)
+  assert.equal(existsSync(fresh), false)
 })

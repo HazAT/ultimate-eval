@@ -1,0 +1,190 @@
+{
+  "id": "20261113t0113-ce22290-88gx",
+  "pins": {
+    "ultimateCommit": "ce22290c6ea5cabf756825d18de5941a39a7f4ba",
+    "scenario": "recipe-v2-pick",
+    "scenarioSha": "fcc3af641d82",
+    "setup": "today",
+    "setupSha": "a7fbce89e1e6",
+    "families": {
+      "default": {
+        "model": "claude-code/claude-opus-5-5",
+        "thinking": "xhigh"
+      },
+      "fast": {
+        "model": "openai-codex/gpt-6.1-sol",
+        "thinking": "medium"
+      },
+      "tiny": {
+        "model": "openai-codex/gpt-6-luna",
+        "thinking": "low"
+      },
+      "review": {
+        "model": "openai-codex/gpt-6-astra",
+        "thinking": "high"
+      }
+    },
+    "roles": {
+      "ultimate": "default",
+      "coordinator": "default",
+      "worker": "fast"
+    },
+    "simModel": "claude-code/claude-opus-5-5",
+    "simEffort": "low",
+    "simPromptSha": "8a0253cc7686",
+    "evalCommit": "15a24c6f27481591f000bf0653ad31f60e74a851"
+  },
+  "pass": true,
+  "status": "done",
+  "minutes": 3.8,
+  "startupSec": 10,
+  "costUsd": 2.26,
+  "features": {
+    "search": true,
+    "detail": true,
+    "favourites": true
+  },
+  "acceptance": [
+    {
+      "name": "page loads with all recipes",
+      "pass": true
+    },
+    {
+      "name": "search filters by name, ignoring case",
+      "pass": true
+    },
+    {
+      "name": "clicking a recipe opens its page at its own address",
+      "pass": true
+    },
+    {
+      "name": "a recipe address survives reload and opens directly",
+      "pass": true
+    },
+    {
+      "name": "a recipe page links back to the list",
+      "pass": true
+    },
+    {
+      "name": "favourites toggle, count in a badge and survive reload",
+      "pass": true
+    },
+    {
+      "name": "no console errors",
+      "pass": true
+    }
+  ],
+  "projectTests": {
+    "pass": true
+  },
+  "allLanded": true,
+  "noRemote": true,
+  "models": {
+    "ultimate": {
+      "expected": "claude-code/claude-opus-5-5",
+      "ran": [
+        "claude-code/claude-opus-5-5"
+      ],
+      "status": "ok"
+    },
+    "coordinator": {
+      "expected": "claude-code/claude-opus-5-5",
+      "ran": [
+        "claude-code/claude-opus-5-5"
+      ],
+      "status": "ok"
+    },
+    "worker": {
+      "expected": "openai-codex/gpt-6.1-sol",
+      "ran": [],
+      "status": "not exercised"
+    }
+  },
+  "answerShape": "list",
+  "sim": {
+    "calls": 7,
+    "costUsd": 0.16,
+    "improvised": 0,
+    "nudges": 0,
+    "refusedAnswers": 0
+  },
+  "scorecard": {
+    "coordinators": {
+      "started": 3,
+      "landed": 3
+    },
+    "workers": {
+      "total": 3
+    },
+    "plans": {
+      "coordinatorsWithPlan": 1,
+      "epics": 1,
+      "tasks": 0
+    },
+    "landings": {
+      "count": 3,
+      "pushed": 0
+    },
+    "timing": {
+      "firstLandingMin": 1.8,
+      "lastLandingMin": 3.3
+    },
+    "usage": {
+      "byModel": {
+        "claude-code/claude-opus-5-5": {
+          "calls": 60,
+          "input": 134,
+          "output": 24519,
+          "cacheRead": 1529486,
+          "cacheWrite": 120495,
+          "costUsd": 1.7607732000000003
+        },
+        "openai-codex/gpt-6-astra": {
+          "calls": 11,
+          "input": 24284,
+          "output": 971,
+          "cacheRead": 47232,
+          "cacheWrite": 0,
+          "costUsd": 0.33862200000000003
+        }
+      },
+      "totalCostUsd": 2.1,
+      "cacheHitRate": 0.916
+    },
+    "questions": {
+      "asked": 1,
+      "withCards": 1,
+      "multi": 1,
+      "multiAnswered": 1,
+      "answered": 1,
+      "waitSec": [
+        4
+      ]
+    },
+    "watchdog": {
+      "failures": 0,
+      "retries": 0
+    },
+    "toolErrors": 1,
+    "toolErrorDetail": {
+      "real": {
+        "bashExit": 1
+      },
+      "benign": {
+        "killed": 4
+      }
+    },
+    "checks": [
+      {
+        "name": "every coordinator works on a feature",
+        "pass": true,
+        "gate": "finding"
+      },
+      {
+        "name": "asked a multi card",
+        "pass": true,
+        "gate": "finding"
+      }
+    ]
+  }
+}

@@ -11,7 +11,7 @@ export type RunResult = {
   features?: Record<string, boolean>
   scorecard?: {
     usage: { totalCostUsd: number }
-    coordinators: unknown[]
+    coordinators: unknown
     workers: { total: number }
     questions?: { multi: number; multiAnswered?: number }
     /** Real tool errors (before categories, every error). */
@@ -33,6 +33,14 @@ export function readRuns(dir: string): RunResult[] {
   return readdirSync(dir)
     .filter((name) => existsSync(join(dir, name, 'result.json')))
     .map((name) => JSON.parse(readFileSync(join(dir, name, 'result.json'), 'utf8')) as RunResult)
+}
+
+/** The published results (`results/<id>.json`, from `pnpm eval export`): enough to rebuild the matrix. */
+export function readPublished(dir: string): RunResult[] {
+  if (!existsSync(dir)) return []
+  return readdirSync(dir)
+    .filter((name) => name.endsWith('.json'))
+    .map((name) => JSON.parse(readFileSync(join(dir, name), 'utf8')) as RunResult)
 }
 
 /** One row of the matrix: the runs of one commit × setup × scenario. */
