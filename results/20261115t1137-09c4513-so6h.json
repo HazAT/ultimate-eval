@@ -1,0 +1,193 @@
+{
+  "id": "20261115t1137-09c4513-so6h",
+  "pins": {
+    "ultimateCommit": "09c4513048cdab29cd95720834abeaf68640f0da",
+    "scenario": "recipe-v2",
+    "scenarioSha": "e96b9481051c",
+    "setup": "today",
+    "setupSha": "a7fbce89e1e6",
+    "families": {
+      "default": {
+        "model": "claude-code/claude-opus-5-5",
+        "thinking": "xhigh"
+      },
+      "fast": {
+        "model": "openai-codex/gpt-6.1-sol",
+        "thinking": "medium"
+      },
+      "tiny": {
+        "model": "openai-codex/gpt-6-luna",
+        "thinking": "low"
+      },
+      "review": {
+        "model": "openai-codex/gpt-6-astra",
+        "thinking": "high"
+      }
+    },
+    "roles": {
+      "ultimate": "default",
+      "coordinator": "default",
+      "worker": "fast"
+    },
+    "simModel": "claude-code/claude-opus-5-5",
+    "simEffort": "low",
+    "simPromptSha": "8a0253cc7686",
+    "evalCommit": "ae09f7e7fa58a13ea78d96455a85f398a5046787"
+  },
+  "pass": true,
+  "status": "done",
+  "minutes": 5.8,
+  "startupSec": 10,
+  "costUsd": 1.97,
+  "features": {
+    "search": true,
+    "detail": true,
+    "favourites": true
+  },
+  "acceptance": [
+    {
+      "name": "page loads with all recipes",
+      "pass": true
+    },
+    {
+      "name": "search filters by name, ignoring case",
+      "pass": true
+    },
+    {
+      "name": "clicking a recipe opens its page at its own address",
+      "pass": true
+    },
+    {
+      "name": "a recipe address survives reload and opens directly",
+      "pass": true
+    },
+    {
+      "name": "a recipe page links back to the list",
+      "pass": true
+    },
+    {
+      "name": "favourites toggle, count in a badge and survive reload",
+      "pass": true
+    },
+    {
+      "name": "no console errors",
+      "pass": true
+    }
+  ],
+  "projectTests": {
+    "pass": true
+  },
+  "allLanded": true,
+  "noRemote": true,
+  "models": {
+    "ultimate": {
+      "expected": "claude-code/claude-opus-5-5",
+      "ran": [
+        "claude-code/claude-opus-5-5"
+      ],
+      "status": "ok"
+    },
+    "coordinator": {
+      "expected": "claude-code/claude-opus-5-5",
+      "ran": [
+        "claude-code/claude-opus-5-5"
+      ],
+      "status": "ok"
+    },
+    "worker": {
+      "expected": "openai-codex/gpt-6.1-sol",
+      "ran": [],
+      "status": "not exercised"
+    }
+  },
+  "answerShape": "list",
+  "sim": {
+    "calls": 7,
+    "costUsd": 0.16,
+    "improvised": 0,
+    "nudges": 0,
+    "refusedAnswers": 0
+  },
+  "scorecard": {
+    "coordinators": {
+      "started": 3,
+      "landed": 3
+    },
+    "workers": {
+      "total": 0
+    },
+    "plans": {
+      "coordinatorsWithPlan": 0,
+      "epics": 0,
+      "tasks": 0
+    },
+    "landings": {
+      "count": 3,
+      "pushed": 0
+    },
+    "timing": {
+      "firstLandingMin": 1.1,
+      "lastLandingMin": 2.2
+    },
+    "usage": {
+      "byModel": {
+        "claude-code/claude-opus-5-5": {
+          "calls": 61,
+          "input": 148,
+          "output": 23112,
+          "cacheRead": 1574481,
+          "cacheWrite": 129491,
+          "costUsd": 1.8136562000000005
+        }
+      },
+      "totalCostUsd": 1.81,
+      "cacheHitRate": 0.924
+    },
+    "questions": {
+      "asked": 1,
+      "withCards": 1,
+      "multi": 0,
+      "multiAnswered": 0,
+      "answered": 1,
+      "waitSec": [
+        5
+      ]
+    },
+    "watchdog": {
+      "failures": 0,
+      "retries": 0
+    },
+    "automations": {
+      "created": 0,
+      "fired": 0,
+      "fires": 0
+    },
+    "toolErrors": 2,
+    "toolErrorDetail": {
+      "real": {
+        "unknown": 1,
+        "bashExit": 1
+      },
+      "benign": {
+        "killed": 2
+      }
+    },
+    "checks": [
+      {
+        "name": "every coordinator works on a feature",
+        "pass": true,
+        "gate": "finding"
+      },
+      {
+        "name": "every reply-expected message answered",
+        "pass": true,
+        "gate": "finding"
+      },
+      {
+        "name": "no message sent twice",
+        "pass": true,
+        "gate": "finding"
+      }
+    ]
+  }
+}
