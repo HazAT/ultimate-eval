@@ -119,6 +119,11 @@ hidden spec, its feature map and the words that match coordinators to features).
 | `recipe-reminder` | search only, plus "remind me in about 2 minutes to try it": an automation fires and its answer reaches the user | `reminder` (pass) |
 | `recipe-ambiguous` | "make the site nicer for people with allergies"; the answers make it allergen tags plus a filter | `card`, `askedFirst` (findings) |
 
+Every fixture's `index.html` declares an inline icon (`<link rel="icon" href="data:,">`): without it the browser's
+`/favicon.ico` request was a console 404, and agents started extra coordinators to fix it. The accept specs launch new
+headless Chromium (`channel: 'chromium'`), which makes that request like the agents' browser does. The fix changed
+every scenario's sha on 2026-11-15, so rows from before it sit in their own matrix rows.
+
 A variant changes only the card: `recipe-v2-pick` links `fixture` to recipe-v2's and re-exports its `accept.ts`, and
 asks Ultimate to let the person tick which features to build now (a multi-choice card exercises `answerShape`). The
 matrix shows per row in how many runs a multi card was asked and answered.

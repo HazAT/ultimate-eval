@@ -67,7 +67,8 @@ function expect(condition: boolean, message: string) {
  * failing the checks still running, and rejects.
  */
 export async function accept(url: string, shots: string, signal?: AbortSignal): Promise<Acceptance> {
-  const browser = await chromium.launch()
+  // New headless, like the agents' browser: the old headless shell never requests /favicon.ico, so it missed that 404.
+  const browser = await chromium.launch({ channel: 'chromium' })
   const abort = () => void browser.close()
   signal?.addEventListener('abort', abort, { once: true })
   const consoleErrors: string[] = []
