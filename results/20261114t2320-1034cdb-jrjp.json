@@ -1,0 +1,176 @@
+{
+  "id": "20261114t2320-1034cdb-jrjp",
+  "pins": {
+    "ultimateCommit": "1034cdbee30e38284fc08cc9fa8dbe370a57414b",
+    "scenario": "recipe-v2",
+    "scenarioSha": "c3a649954e97",
+    "setup": "today",
+    "setupSha": "a7fbce89e1e6",
+    "families": {
+      "default": {
+        "model": "claude-code/claude-opus-5-5",
+        "thinking": "xhigh"
+      },
+      "fast": {
+        "model": "openai-codex/gpt-6.1-sol",
+        "thinking": "medium"
+      },
+      "tiny": {
+        "model": "openai-codex/gpt-6-luna",
+        "thinking": "low"
+      },
+      "review": {
+        "model": "openai-codex/gpt-6-astra",
+        "thinking": "high"
+      }
+    },
+    "roles": {
+      "ultimate": "default",
+      "coordinator": "default",
+      "worker": "fast"
+    },
+    "simModel": "claude-code/claude-opus-5-5",
+    "simEffort": "low",
+    "simPromptSha": "8a0253cc7686",
+    "evalCommit": "0a211197140f4d22ac27b54da54ebaf40621a51d"
+  },
+  "pass": true,
+  "status": "done",
+  "minutes": 3.3,
+  "startupSec": 9,
+  "costUsd": 2.76,
+  "features": {
+    "search": true,
+    "detail": true,
+    "favourites": true
+  },
+  "acceptance": [
+    {
+      "name": "page loads with all recipes",
+      "pass": true
+    },
+    {
+      "name": "search filters by name, ignoring case",
+      "pass": true
+    },
+    {
+      "name": "clicking a recipe opens its page at its own address",
+      "pass": true
+    },
+    {
+      "name": "a recipe address survives reload and opens directly",
+      "pass": true
+    },
+    {
+      "name": "a recipe page links back to the list",
+      "pass": true
+    },
+    {
+      "name": "favourites toggle, count in a badge and survive reload",
+      "pass": true
+    },
+    {
+      "name": "no console errors",
+      "pass": true
+    }
+  ],
+  "projectTests": {
+    "pass": true
+  },
+  "allLanded": true,
+  "noRemote": true,
+  "models": {
+    "ultimate": {
+      "expected": "claude-code/claude-opus-5-5",
+      "ran": [
+        "claude-code/claude-opus-5-5"
+      ],
+      "status": "ok"
+    },
+    "coordinator": {
+      "expected": "claude-code/claude-opus-5-5",
+      "ran": [
+        "claude-code/claude-opus-5-5"
+      ],
+      "status": "ok"
+    },
+    "worker": {
+      "expected": "openai-codex/gpt-6.1-sol",
+      "ran": [],
+      "status": "not exercised"
+    }
+  },
+  "answerShape": "list",
+  "sim": {
+    "calls": 10,
+    "costUsd": 0.25,
+    "improvised": 1,
+    "nudges": 0,
+    "refusedAnswers": 0
+  },
+  "scorecard": {
+    "coordinators": {
+      "started": 4,
+      "landed": 4
+    },
+    "workers": {
+      "total": 0
+    },
+    "plans": {
+      "coordinatorsWithPlan": 0,
+      "epics": 0,
+      "tasks": 0
+    },
+    "landings": {
+      "count": 4,
+      "pushed": 0
+    },
+    "timing": {
+      "firstLandingMin": 0.9,
+      "lastLandingMin": 2.6
+    },
+    "usage": {
+      "byModel": {
+        "claude-code/claude-opus-5-5": {
+          "calls": 86,
+          "input": 214,
+          "output": 29292,
+          "cacheRead": 2346522,
+          "cacheWrite": 182024,
+          "costUsd": 2.5121924
+        }
+      },
+      "totalCostUsd": 2.51,
+      "cacheHitRate": 0.928
+    },
+    "questions": {
+      "asked": 1,
+      "withCards": 1,
+      "multi": 0,
+      "multiAnswered": 0,
+      "answered": 1,
+      "waitSec": [
+        5
+      ]
+    },
+    "watchdog": {
+      "failures": 0,
+      "retries": 0
+    },
+    "toolErrors": 0,
+    "toolErrorDetail": {
+      "real": {},
+      "benign": {
+        "killed": 4,
+        "serverNotUp": 1
+      }
+    },
+    "checks": [
+      {
+        "name": "every coordinator works on a feature",
+        "pass": true,
+        "gate": "finding"
+      }
+    ]
+  }
+}
