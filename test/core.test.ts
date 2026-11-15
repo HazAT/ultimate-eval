@@ -2,7 +2,7 @@ import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import { applyOps, heardAnswers, openQuestions } from '../src/api.ts'
 import type { Entry, Message } from '../src/api.ts'
-import { shapeAnswers } from '../src/sim.ts'
+import { shapeAnswers, simDue } from '../src/sim.ts'
 import { commits, errorCategory, findings, gateFailed, score } from '../src/score.ts'
 import { groups, median, readPublished, table } from '../src/report.ts'
 import { exportResults, scan } from '../src/export.ts'
@@ -80,6 +80,15 @@ test('a multi answer goes as a list, or joined for a commit before ce22290', () 
     { question: 'Go?', answer: 'Yes' },
   ])
   assert.equal(shapeAnswers(card, answers, true)[0]!.answer, 'Search, Favourites')
+})
+
+test('a refused done is re-asked as soon as Ultimate is idle with no card open, not after the quiet interval', () => {
+  // Run 20261115t2246-a22ea38-7spq: done refused while #160 finished, then 3 idle minutes before the next ask.
+  const after = { news: false, sinceSimMs: 15_000, doneRefused: true }
+  assert.equal(simDue({ ...after, idle: false, openCards: 0 }), false)
+  assert.equal(simDue({ ...after, idle: true, openCards: 1 }), false)
+  assert.equal(simDue({ ...after, idle: true, openCards: 0 }), true)
+  assert.equal(simDue({ ...after, doneRefused: false, idle: true, openCards: 0 }), false)
 })
 
 const assistant = (id: number, conversationId: number, model: string, cost: number, extra: object = {}): Entry => ({

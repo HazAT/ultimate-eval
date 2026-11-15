@@ -15,7 +15,7 @@ import { homedir } from 'node:os'
 import { join, resolve } from 'node:path'
 import { applyOps, heardAnswers, Instance, openQuestions } from './api.ts'
 import type { Message } from './api.ts'
-import { decide, shapeAnswers, SIM_EFFORT, SIM_MODEL, SIM_PROMPT_SHA, turnPrompt } from './sim.ts'
+import { decide, shapeAnswers, simDue, SIM_EFFORT, SIM_MODEL, SIM_PROMPT_SHA, turnPrompt } from './sim.ts'
 import type { Card, Decision, Said } from './sim.ts'
 import { coordinatorsOf, planOf, writeLive } from './live.ts'
 import type { Live, Phase } from './live.ts'
@@ -213,8 +213,11 @@ export async function run(options: RunOptions) {
   let server: ChildProcess | undefined
   let instance: Instance | undefined
   let failure: Failure | undefined
-  let simDone: { atMin: number; why: string } | undefined
+  // doneRefusedAt/doneAcceptedAt (ISO) make any gap between the user's first "done" and the accepted one visible.
+  let simDone: { atMin: number; why: string; doneRefusedAt?: string; doneAcceptedAt: string } | undefined
   let firstPromptAt = 0
+  // When the session loop ended: `minutes` stops here, before collection and acceptance.
+  let loopEndedAt = 0
   const launchedAt = Date.now()
   let startedAt = launchedAt
   let ultimateId = 0
@@ -349,6 +352,8 @@ export async function run(options: RunOptions) {
     let calls = 0
     let nudges = 0
     let refreshing: Promise<void> | undefined
+    // Set while the simulated user's "done" stands refused: the loop then polls fast and re-asks once Ultimate is idle.
+    let doneRefusedAt = 0
 
     const ask = async (opening: boolean) => {
       const board = instance!.doc<{ messages: Message[] }>(1, 'board')
@@ -403,7 +408,7 @@ export async function run(options: RunOptions) {
     publish({ phase: 'running', firstPromptAt, ultimate: ultimateId, said })
 
     for (;;) {
-      await instance.changed(15_000)
+      await instance.changed(doneRefusedAt ? 1000 : 15_000)
       const now = Date.now()
       const elapsedMin = (now - firstPromptAt) / 60000
       if (cancelled) {
@@ -485,7 +490,7 @@ export async function run(options: RunOptions) {
 
       const open = openQuestions(instance.doc(1, 'board'))
       const idle = !instance.busy()
-      const due = news || (idle && now - lastSimAt > 3 * 60000) || (open.length > 0 && now - lastSimAt > 5 * 60000)
+      const due = simDue({ news, idle, openCards: open.length, sinceSimMs: now - lastSimAt, doneRefused: !!doneRefusedAt })
       if (!due) continue
       if (calls >= MAX_SIM_CALLS) {
         failure = { reason: 'error', atMin: elapsedMin, detail: `${MAX_SIM_CALLS} simulated user calls`, stuck: lastStuck }
@@ -502,6 +507,8 @@ export async function run(options: RunOptions) {
       if (!turn) continue
       const { decision } = turn.call
       log(`sim: ${decision.action} (${decision.why})`)
+      const refusedBefore = doneRefusedAt
+      if (decision.action !== 'done') doneRefusedAt = 0
       if (decision.action === 'message') {
         if (turn.quietMinutes >= 5) nudges++
         lastNews = Date.now()
@@ -540,14 +547,21 @@ export async function run(options: RunOptions) {
         }
       } else if (decision.action === 'done') {
         if (!instance.busy() && !openQuestions(instance.doc(1, 'board')).length) {
-          simDone = { atMin: afterMin, why: decision.why }
+          simDone = {
+            atMin: afterMin,
+            why: decision.why,
+            ...(refusedBefore ? { doneRefusedAt: new Date(refusedBefore).toISOString() } : {}),
+            doneAcceptedAt: new Date().toISOString(),
+          }
           turn.record.applied = 'done'
           break
         }
+        doneRefusedAt ||= turn.record.at
         turn.record.applied = 'done refused: still busy or cards open'
       }
     }
 
+    loopEndedAt = Date.now()
     if (cancelled) throw new Error('cancelled')
     publish({ phase: 'collecting', busy: [] })
     // Collect everything over the API before the server stops; each request is bounded, a dead core yields none.
@@ -644,7 +658,8 @@ export async function run(options: RunOptions) {
       status: failure ? failure.reason : simDone ? 'done' : 'stopped',
       failure,
       simDone,
-      minutes: Math.round(((Date.now() - firstPromptAt) / 60000) * 10) / 10,
+      // The session only: collection, project tests and acceptance after the loop are harness time.
+      minutes: Math.round(((loopEndedAt - firstPromptAt) / 60000) * 10) / 10,
       startupSec: Math.round((firstPromptAt - launchedAt) / 1000),
       features,
       allLanded,

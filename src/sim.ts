@@ -61,6 +61,27 @@ export type Said = { at: number; who: 'ultimate' | 'you'; text: string }
 
 export type SimCall = { decision: Decision; costUsd: number; ms: number; raw?: string }
 
+/**
+ * Whether the simulated user is due a turn. A refused "done" (Ultimate was still busy or a card was open) makes it due
+ * the moment Ultimate is idle with no card open: the harness must not add its own wait to the run's minutes. It re-asks
+ * rather than accepting the earlier done on its own, because what finished in between (a last card, an answer) may
+ * change the user's mind; one more call is the honest price.
+ */
+export function simDue(s: {
+  news: boolean
+  idle: boolean
+  openCards: number
+  sinceSimMs: number
+  doneRefused: boolean
+}) {
+  return (
+    s.news ||
+    (s.doneRefused && s.idle && s.openCards === 0) ||
+    (s.idle && s.sinceSimMs > 3 * 60000) ||
+    (s.openCards > 0 && s.sinceSimMs > 5 * 60000)
+  )
+}
+
 /** Build one turn's prompt: the scenario, the conversation so far, open cards, and the situation. */
 export function turnPrompt(input: {
   scenario: string
