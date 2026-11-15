@@ -279,6 +279,67 @@ test('hard checks: an extra coordinator, the expected card, asked first, a landi
   assert.equal(gateFailed(lateCard), true)
 })
 
+test('reminder: created, fired, heard after the fire; the board has no pending reply or repeat', async () => {
+  const { DatabaseSync } = await import('node:sqlite')
+  const { mkdtempSync } = await import('node:fs')
+  const { automationsOf } = await import('../src/run.ts')
+  const path = `${mkdtempSync('/tmp/ue-test-')}/state.sqlite`
+  const db = new DatabaseSync(path)
+  const dream = { id: 'A1', key: 'dream:x', name: 'Dream', createdAt: 0, subscribers: ['@ultimate'], runs: [], fires: 0 }
+  const reminder = { id: 'A3', name: 'Remind', createdAt: 60_000, schedule: { kind: 'at', time: 'T' }, subscribers: ['@ultimate'], runs: [], fires: 0 }
+  db.exec(`create table documents (id integer primary key, kind text, scope_kind text, owner_id integer);
+    create table document_revisions (document_id integer, seq integer, kind text, content text);
+    insert into documents values (1, '"ultimate.automations"', 'session', 1);
+    insert into document_revisions values (1, 1, 'base', '${JSON.stringify({ next: 2, automations: { A1: dream } })}'),
+      (1, 2, 'delta', '${JSON.stringify([['s', ['automations', 'A3'], reminder]])}'),
+      (1, 3, 'delta', '${JSON.stringify([['s', ['automations', 'A3', 'fires'], 1], ['s', ['automations', 'A3', 'lastFireAt'], 180_000]])}');`)
+  db.close()
+  const automations = automationsOf(path)
+  assert.deepEqual(automations.map((a) => [a.id, a.fires, a.lastFireAt]), [['A3', 1, 180_000]])
+
+  const say = (id: number, at: number, text: string): Entry => ({
+    id,
+    kind: 'pi.assistant',
+    conversationId: 2,
+    model: [{ role: 'assistant', stopReason: 'stop', timestamp: at, content: [{ type: 'text', text }] }],
+  })
+  const data = (answers: Entry[], messages: Message[]) => ({
+    ultimate: 2,
+    firstPromptAt: 0,
+    conversations: [{ id: 2, busy: false, title: '@ultimate' }],
+    histories: { 1: [], 2: answers },
+    board: { messages },
+    automations,
+  })
+  const expect = { reminder: { gate: 'pass' as const } }
+  const by = (card: ReturnType<typeof score>) => Object.fromEntries(card.checks.map((c) => [c.name, c.pass]))
+
+  // Heard: @ultimate's answer after the fire.
+  const heard = score(data([say(5, 30_000, 'Set.'), say(9, 181_000, 'Time to try the search.')], []), {}, expect)
+  assert.equal(by(heard)['the user heard from Ultimate after the fire'], true)
+  assert.match(heard.checks.find((c) => c.name === 'an automation was created')!.detail!, /A3 at T, wakes @ultimate, created 1 min, 1 fires/)
+  assert.deepEqual(heard.automations, { created: 1, fired: 1, fires: 1 })
+  assert.equal(gateFailed(heard), false)
+
+  // Nothing after the fire fails the gate; a pending reply and a repeated message are findings.
+  const message = (id: number, at: number, extra: Partial<Message> = {}): Message =>
+    ({ id, from: 2, to: 'user', text: 'Search landed.', at, reply: false, state: 'delivered', ...extra })
+  const silent = score(data([say(5, 30_000, 'Set.')], [message(1, 100_000), message(2, 120_000), message(3, 130_000, { text: 'Which?', reply: true })]), {}, expect)
+  const checks = by(silent)
+  assert.equal(checks['the user heard from Ultimate after the fire'], false)
+  assert.equal(checks['every reply-expected message answered'], false)
+  assert.equal(checks['no message sent twice'], false)
+  assert.match(silent.checks.find((c) => c.name === 'no message sent twice')!.detail!, /2 repeats 1/)
+  assert.equal(gateFailed(silent), true)
+
+  // No automation at all fails every reminder check.
+  const none = score({ ...data([], []), automations: [] }, {}, expect)
+  assert.deepEqual(
+    none.checks.filter((c) => c.gate === 'pass').map((c) => c.pass),
+    [false, false, false],
+  )
+})
+
 test('each configured role is checked against what ran: ok, mismatch or not exercised', async () => {
   const { verifyModels } = await import('../src/setup.ts')
   const setup = {

@@ -36,7 +36,8 @@ Runs go one after another; each spends real subscription quota (estimate: $3–1
    (about 1k tokens a call), fixed across runs and pinned by `simPromptSha`.
 6. Watchdog: more than 30 minutes after the first prompt is `timeout`; 10 minutes without progress (something
    Ultimate said, a real change in its conversations, tasks or messages, or a user action; the simulated user's
-   waits and stream reconnects do not count) is `hang`; a dead supervisor, or no event stream for 2 minutes (a dead
+   waits and stream reconnects do not count) is `hang`, unless an automation an agent created has a scheduled fire
+   still ahead (a reminder everyone waits for; the 30-minute budget still bounds it); a dead supervisor, or no event stream for 2 minutes (a dead
    or restart-looping core), is `crash`. Each records where it stood (`failure.stuck`) and the cost so far. Every
    API request is bounded. Ctrl+C or TERM stops the run as `cancelled` (kept in `runs/`, left out of the matrix) and
    cleans up; a second signal kills at once.
@@ -70,7 +71,12 @@ Runs go one after another; each spends real subscription quota (estimate: $3–1
       - `askedFirst`: that card came before the first `git commit` anywhere;
       - `landFailedFirst`: a landing failed on a lander check (a merge conflict does not count), and everything
         still landed;
-      - `untouched {paths}`: those files are unchanged on main against the fixture commit.
+      - `untouched {paths}`: those files are unchanged on main against the fixture commit;
+      - `reminder`: an automation was created, it fired, and the user heard from Ultimate after its first fire (a
+        message to the user, or an @ultimate answer). Automations come from the stopped home's `ultimate.automations`
+        ledger, dream's built-in ones left out; `scorecard.automations` counts them in every run.
+    - Always, as findings, from the Messages log at the end: **every reply-expected message answered** (none left
+      sent, delivered or failed) and **no message sent twice** (same sender, recipient and text).
 - `transcripts/`: every conversation, the Messages log, the conversation list; `sim.json`: every simulated-user turn
   with its prompt and decision; `screenshots/`; `acceptance.json`; `project-tests.txt`; `home/` (sqlite, supervisor log).
 
@@ -110,6 +116,7 @@ hidden spec, its feature map and the words that match coordinators to features).
 | `recipe-v2-pick` | the same, picked from a multi card | `card multi` (finding) |
 | `recipe-bug` | search and favourites built, with two planted bugs reported as symptoms | `untouched` (finding) |
 | `recipe-land-fail` | recipe-v2's goal, with a stricter lander check: the site's scripts stay within 90 non-empty lines. In smoke runs on ce22290 (4/4), coordinators read the lander's checks and met them before submitting, so no landing failed; a README rule before it went the same way. It measures whether agents meet the checks up front; recovery from a failed landing gets its own scenario later (Daniel, 2026-11-14) | `landFailedFirst` (finding) |
+| `recipe-reminder` | search only, plus "remind me in about 2 minutes to try it": an automation fires and its answer reaches the user | `reminder` (pass) |
 | `recipe-ambiguous` | "make the site nicer for people with allergies"; the answers make it allergen tags plus a filter | `card`, `askedFirst` (findings) |
 
 A variant changes only the card: `recipe-v2-pick` links `fixture` to recipe-v2's and re-exports its `accept.ts`, and

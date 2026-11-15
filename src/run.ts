@@ -13,14 +13,14 @@ import { createServer } from 'node:net'
 import { DatabaseSync } from 'node:sqlite'
 import { homedir } from 'node:os'
 import { join, resolve } from 'node:path'
-import { heardAnswers, Instance, openQuestions } from './api.ts'
+import { applyOps, heardAnswers, Instance, openQuestions } from './api.ts'
 import type { Message } from './api.ts'
 import { decide, shapeAnswers, SIM_EFFORT, SIM_MODEL, SIM_PROMPT_SHA, turnPrompt } from './sim.ts'
 import type { Card, Decision, Said } from './sim.ts'
 import { coordinatorsOf, writeLive } from './live.ts'
 import type { Live, Phase } from './live.ts'
 import { answerText, gateFailed, readExpect, score } from './score.ts'
-import type { Scorecard } from './score.ts'
+import type { Automation, Scorecard } from './score.ts'
 import { readSetup, seedUserHome, verifyModels } from './setup.ts'
 
 export const ROOT = resolve(import.meta.dirname, '..')
@@ -131,6 +131,40 @@ export function agentProfiles(database: string): Record<number, string> {
   } finally {
     db.close()
   }
+}
+
+/**
+ * The automations the run's agents created: the session's `ultimate.automations` ledger (Ultimate's
+ * extensions/automations), its base and deltas replayed, without dream's built-in ones (keys `dream:`). Read from a
+ * stopped home's database only, like `agentProfiles`.
+ */
+export function automationsOf(database: string): Automation[] {
+  if (!existsSync(database)) return []
+  const db = new DatabaseSync(database, { readOnly: true })
+  try {
+    const rows = db
+      .prepare(
+        `select r.kind as kind, r.content as content from documents d join document_revisions r on r.document_id = d.id
+         where d.kind = '"ultimate.automations"' and d.scope_kind = 'session' order by r.seq`,
+      )
+      .all() as { kind: string; content: string }[]
+    let ledger: unknown = { automations: {} }
+    for (const row of rows)
+      ledger = row.kind === 'base' ? JSON.parse(row.content) : applyOps(ledger, JSON.parse(row.content))
+    return Object.values((ledger as { automations: Record<string, Automation & { key?: string }> }).automations).filter(
+      (a) => !a.key?.startsWith('dream:'),
+    )
+  } finally {
+    db.close()
+  }
+}
+
+/** Whether an enabled automation an agent created has a scheduled fire still to come, read live over the API. */
+async function scheduledFireAhead(instance: Instance) {
+  const list = await instance
+    .action<(Automation & { enabled?: boolean; nextAt?: number; key?: string })[]>('automations', 'list', {})
+    .catch(() => [])
+  return list.some((a) => a.enabled && !a.key?.startsWith('dream:') && (a.nextAt ?? 0) > Date.now())
 }
 
 /** Claude Code keeps a session folder per working directory; these are the run's. */
@@ -442,7 +476,8 @@ export async function run(options: RunOptions) {
         break
       }
       const quiet = (now - Math.max(instance.lastProgress, lastNews)) / 60000
-      if (quiet > HANG_MIN) {
+      // A scheduled fire still ahead is a wait everyone agreed on (a reminder), not a hang: the budget still bounds it.
+      if (quiet > HANG_MIN && !(await scheduledFireAhead(instance))) {
         failure = { reason: 'hang', atMin: elapsedMin, detail: `nothing new for ${HANG_MIN} minutes`, stuck: lastStuck }
         break
       }
@@ -533,8 +568,9 @@ export async function run(options: RunOptions) {
         cpSync(join(home, name), join(out, 'home', name))
       }
     const agents = agentProfiles(join(home, 'state.sqlite'))
+    const automations = automationsOf(join(home, 'state.sqlite'))
     const card: Scorecard = score(
-      { conversations, histories, board, ultimate: ultimateId, firstPromptAt, agents },
+      { conversations, histories, board, ultimate: ultimateId, firstPromptAt, agents, automations },
       FEATURE_WORDS,
       expect,
     )

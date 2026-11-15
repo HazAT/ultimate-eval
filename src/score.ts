@@ -4,6 +4,7 @@
  */
 import { existsSync, readFileSync } from 'node:fs'
 import { join } from 'node:path'
+import { heardAnswers } from './api.ts'
 import type { Entry, Message, Summary } from './api.ts'
 
 export type Collected = {
@@ -17,6 +18,21 @@ export type Collected = {
    * home. A display label can be anything; this cannot. Ad-hoc agents have none.
    */
   agents?: Record<number, string>
+  /** The automations the run's agents created (the built-in dream ones left out), read from the stopped home. */
+  automations?: Automation[]
+}
+
+/** What the scorecard needs of an automation record (automations/types.ts in Ultimate). */
+export type Automation = {
+  id: string
+  name: string
+  createdAt: number
+  schedule?: { kind: string; time?: string; expr?: string; ms?: number }
+  prompt?: string
+  subscribers: (number | string)[]
+  runs: { id: string; firedAt: number; conversationId?: number; status: string }[]
+  fires: number
+  lastFireAt?: number
 }
 
 type ModelUsage = {
@@ -55,6 +71,8 @@ export type Scorecard = {
     /** Each real error. */
     list: { conversation: number; entry: number; tool: string; category: RealError; text: string }[]
   }
+  /** Automations the agents created (dream's built-in ones left out), how many fired, and their fires. */
+  automations: { created: number; fired: number; fires: number }
   /** Hard checks: the scenario's expectations and the extra-coordinator check. A failed `finding` is recorded only. */
   checks: Check[]
 }
@@ -75,6 +93,8 @@ export type Expect = {
   landFailedFirst?: { gate: Gate }
   /** Project paths unchanged on main against the fixture commit; checked by the runner on the project. */
   untouched?: { paths: string[]; gate: Gate }
+  /** An automation was created, it fired, and something the user sees came after its first fire. */
+  reminder?: { gate: Gate }
 }
 
 /**
@@ -320,6 +340,65 @@ export function score(data: Collected, featureWords: Record<string, RegExp>, exp
     })
   }
 
+  // The Messages log at the end: a reply-expected message nobody answered, and the same text sent twice.
+  const pending = data.board.messages.filter((m) => m.reply && ['sent', 'delivered', 'failed'].includes(m.state))
+  checks.push({
+    name: 'every reply-expected message answered',
+    pass: !pending.length,
+    gate: 'finding',
+    detail: pending.length
+      ? pending.map((m) => `${m.id} ${m.from}→${m.to} ${m.state}`).join('; ')
+      : `${data.board.messages.filter((m) => m.reply).length} answered`,
+  })
+  const firstOf = new Map<string, number>()
+  const twice: string[] = []
+  for (const m of data.board.messages) {
+    const key = `${m.from}|${m.to}|${m.text.trim()}`
+    if (firstOf.has(key)) twice.push(`${m.id} repeats ${firstOf.get(key)}`)
+    else firstOf.set(key, m.id)
+  }
+  checks.push({
+    name: 'no message sent twice',
+    pass: !twice.length,
+    gate: 'finding',
+    detail: twice.length ? twice.join('; ') : `${data.board.messages.length} messages`,
+  })
+
+  const automations = data.automations ?? []
+  if (expect.reminder) {
+    const fired = automations.filter((a) => a.fires > 0)
+    const firedAt = Math.min(...fired.flatMap((a) => (a.lastFireAt ? [a.lastFireAt] : a.runs.map((r) => r.firedAt))))
+    // What the user sees after the fire: a message to the user, or one of @ultimate's own answers.
+    const toUserAfter = data.board.messages.filter((m) => m.to === 'user' && m.at >= firedAt)
+    const heardAfter = heardAnswers(data.histories[data.ultimate] ?? [], 0, data.board, data.ultimate, false, textOf)
+      .answers.filter((a) => (a.at ?? 0) >= firedAt)
+    const reached = toUserAfter.length > 0 || heardAfter.length > 0
+    const describe = (a: Automation) =>
+      `${a.id} ${a.schedule ? `${a.schedule.kind} ${a.schedule.time ?? a.schedule.expr ?? a.schedule.ms ?? ''}`.trim() : 'no schedule'}, ${a.prompt ? 'prompt run' : `wakes ${a.subscribers.join(', ')}`}, created ${minutes(a.createdAt)} min, ${a.fires} fires`
+    checks.push({
+      name: 'an automation was created',
+      pass: automations.length > 0,
+      gate: expect.reminder.gate,
+      detail: automations.length ? automations.map(describe).join('; ') : 'none',
+    })
+    checks.push({
+      name: 'the automation fired',
+      pass: fired.length > 0,
+      gate: expect.reminder.gate,
+      detail: fired.length ? `first fire at ${minutes(firedAt)} min` : 'no fire',
+    })
+    checks.push({
+      name: 'the user heard from Ultimate after the fire',
+      pass: fired.length > 0 && reached,
+      gate: expect.reminder.gate,
+      detail: !fired.length
+        ? 'no fire'
+        : reached
+          ? `${toUserAfter.length} messages and ${heardAfter.length} @ultimate answers after it`
+          : 'nothing the user sees after the fire',
+    })
+  }
+
   return {
     coordinators,
     featuresWithCoordinator,
@@ -363,6 +442,11 @@ export function score(data: Collected, featureWords: Record<string, RegExp>, exp
     watchdog: { failures, retries },
     toolErrors: Object.values(real).reduce((a, b) => a + b, 0),
     toolErrorDetail: { benign, real, list: realList },
+    automations: {
+      created: automations.length,
+      fired: automations.filter((a) => a.fires > 0).length,
+      fires: automations.reduce((n, a) => n + a.fires, 0),
+    },
     checks,
   }
 }

@@ -7,7 +7,7 @@
 import { existsSync, readdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import type { Entry, Message, Summary } from './api.ts'
-import { agentProfiles, ROOT } from './run.ts'
+import { agentProfiles, automationsOf, ROOT } from './run.ts'
 import { gateFailed, readExpect, score } from './score.ts'
 import type { Scorecard } from './score.ts'
 
@@ -36,6 +36,7 @@ export async function rescore(dir: string) {
       ultimate,
       firstPromptAt: said.find((s) => s.who === 'you')?.at ?? 0,
       agents: agentProfiles(join(dir, 'home', 'state.sqlite')),
+      automations: automationsOf(join(dir, 'home', 'state.sqlite')),
     },
     FEATURE_WORDS,
     readExpect(scenarioDir),

@@ -95,6 +95,7 @@ export function publicResult(r: Json) {
         waitSec: ((card.questions.waitSec ?? []) as unknown[]).flatMap((s) => num(s) ?? []),
       },
       watchdog: counts(card.watchdog),
+      automations: card.automations && counts(card.automations),
       toolErrors: num(card.toolErrors),
       toolErrorDetail: { real: counts(card.toolErrorDetail?.real), benign: counts(card.toolErrorDetail?.benign) },
       checks: ((card.checks ?? []) as Json[]).map((c) => ({ name: str(c.name), pass: bool(c.pass), gate: str(c.gate) })),
