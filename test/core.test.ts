@@ -6,7 +6,7 @@ import { shapeAnswers } from '../src/sim.ts'
 import { commits, errorCategory, findings, gateFailed, score } from '../src/score.ts'
 import { groups, median, readPublished, table } from '../src/report.ts'
 import { exportResults, scan } from '../src/export.ts'
-import { coordinatorsOf, writeLive } from '../src/live.ts'
+import { coordinatorsOf, planOf, status, writeLive } from '../src/live.ts'
 import type { Live } from '../src/live.ts'
 import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
@@ -432,6 +432,31 @@ test('live.json is replaced whole, keeps the last turns, and knows which coordin
   assert.equal(read.said[0]!.text.length, 600)
   assert.equal(live.said.length, 12)
   assert.equal(existsSync(`${path}.tmp`), false)
+})
+
+test('status lists unfinished runs whose runner is alive, compact, with the A/B plan when set', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'ue-status-'))
+  const write = (id: string, over: Partial<Live>, finished = false) => {
+    mkdirSync(join(dir, id))
+    writeFileSync(join(dir, id, 'live.json'), JSON.stringify({
+      id, pid: 4242, phase: 'running', commit: 'abc1234def', setup: 's', scenario: 'recipe-v2', repeat: { index: 2, total: 3 },
+      launchedAt: 1000, budgetMin: 30, updatedAt: 2000, said: [{ at: 1, who: 'you', text: 'x' }], busy: [], coordinators: [], open: 0, ...over,
+    }))
+    if (finished) writeFileSync(join(dir, id, 'result.json'), '{}')
+  }
+  write('20261115t2100-abc1234-aaaa', { plan: { index: 2, total: 4 } })
+  write('20261115t2000-abc1234-bbbb', { pid: 999 }) // runner gone
+  write('20261115t1900-abc1234-cccc', {}, true) // finished
+  mkdirSync(join(dir, '20261115t1800-abc1234-dddd')) // no live.json
+  writeFileSync(join(dir, '20261115t1700-abc1234-eeee'), '') // not a run folder
+  assert.deepEqual(status(dir, (pid) => pid === 4242), {
+    runs: [{
+      id: '20261115t2100-abc1234-aaaa', scenario: 'recipe-v2', commit: 'abc1234def', phase: 'running',
+      repeat: { index: 2, total: 3 }, plan: { index: 2, total: 4 }, startedAt: 1000, updatedAt: 2000,
+    }],
+  })
+  assert.deepEqual(status(join(dir, 'missing'), () => true), { runs: [] })
+  assert.deepEqual([planOf('2/4'), planOf(undefined), planOf('5/4'), planOf('0/4'), planOf('x')], [{ index: 2, total: 4 }, undefined, undefined, undefined, undefined])
 })
 
 test('export publishes only allowlisted fields of finished runs, and the scan refuses leaks', () => {

@@ -184,7 +184,22 @@ export type Entry = {
 }
 export type Page = { total: number; start: number; entries: Entry[] }
 
+/** `status`: the runs in progress, compact; times in epoch ms. */
+export type Status = {
+  runs: {
+    id: string
+    scenario: string
+    commit: string
+    phase: string
+    repeat: { index: number; total: number }
+    plan?: { index: number; total: number }
+    startedAt: number
+    updatedAt: number
+  }[]
+}
+
 export const OverviewAction = actionRef<null, Overview>('bench', 'overview')
+export const StatusAction = actionRef<null, Status>('bench', 'status')
 export const LiveAction = actionRef<null, InProgress[]>('bench', 'live')
 export const RunAction = actionRef<{ id: string }, Run>('bench', 'run')
 export const TranscriptAction = actionRef<

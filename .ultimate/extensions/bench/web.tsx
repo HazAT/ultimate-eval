@@ -10,6 +10,7 @@ import {
   cn,
   defineWebExtension,
   errorMessage,
+  keepLast,
   useAction,
   useExtensionUiState,
   useUltimate,
@@ -18,7 +19,7 @@ import {
 import { Detail } from './detail.tsx'
 import { Overview } from './overview.tsx'
 import { Dot, Note } from './parts.tsx'
-import { LiveAction, OverviewAction, mins, short, toneOf, toneText, usd, verdict, when } from './types.ts'
+import { LiveAction, OverviewAction, StatusAction, mins, short, toneOf, toneText, usd, verdict, when } from './types.ts'
 import type { Summary } from './types.ts'
 
 /** How often the run in progress is read while the surface is on screen. */
@@ -126,6 +127,34 @@ function Bench() {
   )
 }
 
+/** How often the status line asks whether a run is in progress. */
+const STATUS_POLL = 10_000
+
+/** `Eval · run 2/4 · running` on the status line while a run is in progress: the A/B plan's place when the script set
+ * one, else the repeat's. Opens Bench. */
+function EvalChip() {
+  const visible = useSyncExternalStore(subscribe, () => document.visibilityState === 'visible')
+  const { showSurface } = useUltimate()
+  const { data } = useAction(StatusAction, null, { every: STATUS_POLL, enabled: visible, onError: keepLast })
+  const run = data?.runs[0]
+  if (!run) return null
+  const at = run.plan ?? run.repeat
+  return (
+    <button
+      className="-mx-1 flex min-w-0 cursor-pointer items-center gap-1.5 rounded-sm px-1 transition-colors hover:bg-accent hover:text-foreground"
+      data-bench-status={run.id}
+      onClick={() => showSurface('bench')}
+      title={`Eval ${run.scenario} on ${short(run.commit)}${run.plan ? `, repeat ${run.repeat.index}/${run.repeat.total}` : ''}: open Bench`}
+      type="button"
+    >
+      <Dot pulse tone="live" />
+      <span className="truncate">
+        Eval{at.total > 1 && ` · run ${at.index}/${at.total}`} · {run.phase}
+      </span>
+    </button>
+  )
+}
+
 function RunRow({ run: r, selected, onClick }: { run: Summary; selected: boolean; onClick: () => void }) {
   const tone = toneOf(r)
   return (
@@ -152,6 +181,7 @@ function RunRow({ run: r, selected, onClick }: { run: Summary; selected: boolean
 }
 
 export default defineWebExtension({
+  slots: { 'statusline.right': [{ component: EvalChip, order: -20, phone: true }] },
   surfaces: [
     {
       id: 'bench',

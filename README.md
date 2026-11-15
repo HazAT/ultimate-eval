@@ -20,6 +20,8 @@ pnpm check && pnpm test
 
 `--repo` defaults to `~/Projects/ultimate`, which is only read: the run clones it with `git clone --shared`.
 Runs go one after another; each spends real subscription quota (estimate: $3–15 list), so schedule them at night.
+A script looping over several calls (an A/B) sets `EVAL_PLAN=i/N` on each, so Bench's `status` and the status line
+show the overall position (`run 2/4`) rather than the repeat within one call.
 
 ## What one run does (`src/run.ts`)
 

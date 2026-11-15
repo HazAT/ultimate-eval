@@ -12,6 +12,9 @@ Bench, in the switcher, with the agent docked (a phone shows it from the title b
   asked, usage per model, models by role, pins), the simulated user (its decisions with Ultimate's lines between them,
   improvised ones marked), transcripts (one conversation at a time, tool calls folded), screenshots and test output.
 - `live` is polled every 3 s while Bench is on screen; a run leaving it reloads the overview.
+- The status line shows `Eval · run 2/4 · running` while a run is in progress (from `status`, polled every 10 s
+  while the tab is visible); a click opens Bench. The position is the A/B plan's when `EVAL_PLAN` is set, else the
+  `--repeat` position, and is left out for a single run.
 
 Files: `web.tsx` (the surface), `overview.tsx`, `live.tsx`, `detail.tsx`, `transcript.tsx`, `parts.tsx`,
 `types.ts` (action refs and result shapes).
@@ -29,5 +32,13 @@ All read `runs/` only, except `cancel`.
 - `transcript {id, conversation, before?}`: up to 200 entries of one conversation, compact; an entry without a message
   (the lander's steps) carries its `data` as cut JSON.
 - `screenshot {id, name}`: a PNG as a data URL.
+- `status` (for other instances and agents): the runs in progress, compact, from `src/live.ts` `status()`:
+  `{ runs: [{ id, scenario, commit, phase, repeat: { index, total }, plan?: { index, total }, startedAt, updatedAt }] }`,
+  newest first, at most 10. Only unfinished runs whose live.json names a live runner; it reads nothing but those
+  live.json files. `commit` is the Ultimate commit under test; `startedAt` (launch) and `updatedAt` are epoch ms.
+  `repeat` counts within one `pnpm eval run --repeat N`; `plan` is the call's place in a script looping over several
+  calls, present only when the script sets `EVAL_PLAN=i/N` for each call. Another instance reaches it with
+  `POST /api/extensions/bench/actions/status` (`lib/remote.ts` `postAction`), as Ultimate's projects rail calls
+  `status/status`; it is a poll action, so its calls stay out of the trace.
 - `cancel {id}` (UI only): SIGTERM to the runner named in live.json, if it is still a `src/cli.ts run` process. The run
   ends as `cancelled` and the remaining repeats are skipped.

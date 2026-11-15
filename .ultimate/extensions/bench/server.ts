@@ -152,6 +152,18 @@ export const actions = {
     return inProgress(ctx)
   },
 
+  /**
+   * The runs in progress, compact, for other instances (a sidebar showing "waits on ultimate-eval · run 2/4") and
+   * agents: `{ runs: [{ id, scenario, commit, phase, repeat, plan?, startedAt, updatedAt }] }`, times in epoch ms.
+   * Reads only the live.json of unfinished runs, from src/live.ts so the shape is tested there.
+   */
+  async status(_args: unknown, ctx: Ctx) {
+    const live = (await import(pathToFileURL(join(ctx.host.projectRoot, 'src/live.ts')).href)) as {
+      status: (dir: string, alive: (pid: unknown) => boolean) => unknown
+    }
+    return live.status(runsDir(ctx), (pid) => isRunner(pid, ctx))
+  },
+
   /** One run in full: result.json, the simulated user's turns, the transcripts and screenshots it has, test output. */
   async run(args: unknown, ctx: Ctx) {
     const id = runId(arg(args, 'id'))
@@ -253,5 +265,5 @@ export const actions = {
 
 /** Cancel spends nothing but ends a run Daniel paid for: his choice, never an agent's. */
 export const userActions = ['cancel']
-/** Polled by the surface while it is open. */
-export const pollActions = ['live', 'transcript']
+/** Polled by the surface while it is open, and `status` by the status line and other instances. */
+export const pollActions = ['live', 'transcript', 'status']

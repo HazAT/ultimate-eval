@@ -17,7 +17,7 @@ import { applyOps, heardAnswers, Instance, openQuestions } from './api.ts'
 import type { Message } from './api.ts'
 import { decide, shapeAnswers, SIM_EFFORT, SIM_MODEL, SIM_PROMPT_SHA, turnPrompt } from './sim.ts'
 import type { Card, Decision, Said } from './sim.ts'
-import { coordinatorsOf, writeLive } from './live.ts'
+import { coordinatorsOf, planOf, writeLive } from './live.ts'
 import type { Live, Phase } from './live.ts'
 import { answerText, gateFailed, readExpect, score } from './score.ts'
 import type { Automation, Scorecard } from './score.ts'
@@ -232,6 +232,7 @@ export async function run(options: RunOptions) {
     setup: setup.name,
     scenario: options.scenario,
     repeat: options.repeat ?? { index: 1, total: 1 },
+    plan: planOf(process.env.EVAL_PLAN),
     launchedAt,
     budgetMin: BUDGET_MIN,
     updatedAt: Date.now(),
