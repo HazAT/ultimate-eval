@@ -40,9 +40,9 @@ All read `runs/` only, except `cancel`.
   calls, present only when the script sets `EVAL_PLAN=i/N` for each call. Another instance reaches it with
   `POST /api/extensions/bench/actions/status` (`lib/remote.ts` `postAction`), as Ultimate's projects rail calls
   `status/status`; it is a poll action, so its calls stay out of the trace.
-- `progress` (for other instances): the newest run in progress as one step, `{ label: 'run', index, total }` from its
-  `plan` when set, else its `repeat`; `null` when nothing runs. Ultimate's built-in `status/status` calls it on every
-  enabled extension, so another instance shows "waits on ultimate-eval · run 2/4". From `src/live.ts` `progress()`,
+- `projectProgress` (for other instances): the newest run in progress as one step, `{ label: 'run', index, total }` from its
+  `plan` when set, else its `repeat`; `null` when nothing runs. Ultimate's built-in `status/status` calls `projectProgress` on
+  every enabled extension, so another instance shows "waits on ultimate-eval · run 2/4". From `src/live.ts` `progress()`,
   as cheap as `status`, and a poll action too.
 - `cancel {id}` (UI only): SIGTERM to the runner named in live.json, if it is still a `src/cli.ts run` process. The run
   ends as `cancelled` and the remaining repeats are skipped.

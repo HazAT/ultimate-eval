@@ -168,7 +168,7 @@ export const actions = {
    * The newest run in progress as `{ label: 'run', index, total }` (its A/B plan place, else its repeat), or null: what
    * Ultimate's `status/status` passes on so another instance shows "waits on ultimate-eval · run 2/4". As cheap as `status`.
    */
-  async progress(_args: unknown, ctx: Ctx) {
+  async projectProgress(_args: unknown, ctx: Ctx) {
     const live = (await import(pathToFileURL(join(ctx.host.projectRoot, 'src/live.ts')).href)) as {
       progress: (dir: string, alive: (pid: unknown) => boolean) => { label: string; index: number; total: number } | null
     }
@@ -276,5 +276,5 @@ export const actions = {
 
 /** Cancel spends nothing but ends a run Daniel paid for: his choice, never an agent's. */
 export const userActions = ['cancel']
-/** Polled by the surface while it is open, and `status` and `progress` by the status line and other instances. */
-export const pollActions = ['live', 'transcript', 'status', 'progress']
+/** Polled by the surface while it is open, and `status` and `projectProgress` by the status line and other instances. */
+export const pollActions = ['live', 'transcript', 'status', 'projectProgress']
