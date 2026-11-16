@@ -1,0 +1,208 @@
+{
+  "id": "20261116t1411-68675ec-383s",
+  "pins": {
+    "ultimateCommit": "68675ec0199e40177672e1510ba5a76c8988480c",
+    "scenario": "recipe-tell",
+    "scenarioSha": "5038c364bde3",
+    "setup": "today",
+    "setupSha": "a7fbce89e1e6",
+    "families": {
+      "default": {
+        "model": "claude-code/claude-opus-5-5",
+        "thinking": "xhigh"
+      },
+      "fast": {
+        "model": "openai-codex/gpt-6.1-sol",
+        "thinking": "medium"
+      },
+      "tiny": {
+        "model": "openai-codex/gpt-6-luna",
+        "thinking": "low"
+      },
+      "review": {
+        "model": "openai-codex/gpt-6-astra",
+        "thinking": "high"
+      }
+    },
+    "roles": {
+      "ultimate": "default",
+      "coordinator": "default",
+      "worker": "fast"
+    },
+    "simModel": "claude-code/claude-opus-5-5",
+    "simEffort": "low",
+    "simPromptSha": "8a0253cc7686",
+    "evalCommit": "afe170b4a694cc97b0e9e28a389f66f515c68e99"
+  },
+  "pass": true,
+  "status": "done",
+  "minutes": 0.7,
+  "startupSec": 33,
+  "costUsd": 0.25,
+  "features": {
+    "readme": true
+  },
+  "acceptance": [
+    {
+      "name": "page loads with all recipes",
+      "pass": true
+    },
+    {
+      "name": "no console errors",
+      "pass": true
+    },
+    {
+      "name": "README names the recipe endpoint",
+      "pass": true
+    }
+  ],
+  "projectTests": {
+    "pass": true
+  },
+  "allLanded": true,
+  "noRemote": true,
+  "models": {
+    "ultimate": {
+      "expected": "claude-code/claude-opus-5-5",
+      "ran": [
+        "claude-code/claude-opus-5-5"
+      ],
+      "status": "ok"
+    },
+    "coordinator": {
+      "expected": "claude-code/claude-opus-5-5",
+      "ran": [],
+      "status": "not exercised"
+    },
+    "worker": {
+      "expected": "openai-codex/gpt-6.1-sol",
+      "ran": [],
+      "status": "not exercised"
+    }
+  },
+  "answerShape": "list",
+  "sim": {
+    "calls": 4,
+    "costUsd": 0.06,
+    "improvised": 0,
+    "nudges": 0,
+    "refusedAnswers": 0
+  },
+  "scorecard": {
+    "coordinators": {
+      "started": 0,
+      "landed": 0
+    },
+    "workers": {
+      "total": 0
+    },
+    "plans": {
+      "coordinatorsWithPlan": 0,
+      "epics": 0,
+      "tasks": 0
+    },
+    "landings": {
+      "count": 0,
+      "pushed": 0
+    },
+    "timing": {},
+    "usage": {
+      "byModel": {
+        "claude-code/claude-opus-5-5": {
+          "calls": 9,
+          "input": 20,
+          "output": 1173,
+          "cacheRead": 186179,
+          "cacheWrite": 15591,
+          "costUsd": 0.1855038
+        }
+      },
+      "totalCostUsd": 0.19,
+      "cacheHitRate": 0.923
+    },
+    "questions": {
+      "asked": 0,
+      "withCards": 0,
+      "multi": 0,
+      "multiAnswered": 0,
+      "answered": 0,
+      "waitSec": []
+    },
+    "watchdog": {
+      "failures": 0,
+      "retries": 0
+    },
+    "automations": {
+      "created": 0,
+      "fired": 0,
+      "fires": 0
+    },
+    "toolErrors": 0,
+    "toolErrorDetail": {
+      "real": {},
+      "benign": {}
+    },
+    "checks": [
+      {
+        "name": "every coordinator works on a feature",
+        "pass": true,
+        "gate": "finding"
+      },
+      {
+        "name": "every reply-expected message answered",
+        "pass": true,
+        "gate": "finding"
+      },
+      {
+        "name": "no message sent twice",
+        "pass": true,
+        "gate": "finding"
+      },
+      {
+        "name": "told recipes-api, delivered",
+        "pass": true,
+        "gate": "pass"
+      },
+      {
+        "name": "recipes-api answered the tell",
+        "pass": true,
+        "gate": "pass"
+      },
+      {
+        "name": "the user heard recipes-api's answer",
+        "pass": true,
+        "gate": "pass"
+      },
+      {
+        "name": "recipes-api: received one tell",
+        "pass": true,
+        "gate": "finding"
+      },
+      {
+        "name": "recipes-api: answered the tell",
+        "pass": true,
+        "gate": "finding"
+      },
+      {
+        "name": "recipes-api: asked its user nothing",
+        "pass": true,
+        "gate": "finding"
+      },
+      {
+        "name": "recipes-api: every reply-expected message answered",
+        "pass": true,
+        "gate": "finding"
+      },
+      {
+        "name": "recipes-api: no message sent twice",
+        "pass": true,
+        "gate": "finding"
+      },
+      {
+        "name": "recipes-api: supervisor log clean",
+        "pass": true,
+        "gate": "finding"
+      }
+    ]
+  }
+}
