@@ -3,7 +3,7 @@ import assert from 'node:assert/strict'
 import { applyOps, heardAnswers, openQuestions } from '../src/api.ts'
 import type { Entry, Message } from '../src/api.ts'
 import { shapeAnswers, simDue } from '../src/sim.ts'
-import { commits, errorCategory, findings, gateFailed, peerChecks, score } from '../src/score.ts'
+import { commits, errorCategory, everyLanded, findings, gateFailed, peerChecks, score } from '../src/score.ts'
 import { groups, median, readPublished, table } from '../src/report.ts'
 import { exportResults, scan } from '../src/export.ts'
 import { coordinatorsOf, planOf, progress, status, writeLive } from '../src/live.ts'
@@ -286,6 +286,49 @@ test('hard checks: an extra coordinator, the expected card, asked first, a landi
   const lateCard = score(late, words, expect)
   assert.equal(lateCard.checks.find((c) => c.name === 'asked before the first commit')!.pass, false)
   assert.equal(gateFailed(lateCard), true)
+})
+
+test('a coordinator that changed nothing has nothing to land; one with a commit or a worker commit must land', () => {
+  // Run 20261116t2152-7233760-sc2r: #632, a read-only browser check named after all features, failed allLanded.
+  const words = { search: /search/i }
+  const call = (id: number, conversationId: number, name: string, args: object): Entry => ({
+    id,
+    kind: 'pi.assistant',
+    conversationId,
+    model: [{ role: 'assistant', content: [{ type: 'toolCall', name, arguments: args }] }],
+  })
+  const card = score(
+    {
+      ultimate: 2,
+      firstPromptAt: 0,
+      conversations: [
+        { id: 10, busy: false, title: 'Search box' },
+        { id: 11, busy: false, title: 'Check search in the browser' },
+        { id: 12, busy: false, title: 'Search ranking' },
+        { id: 13, busy: false, title: 'Search hints' },
+        { id: 14, busy: false, label: 'worker', parentConversationId: 13 },
+      ],
+      histories: {
+        1: [10, 11, 12, 13].map((branch) => ({ id: branch, kind: 'lineage.branched', conversationId: 1, data: { branch } })),
+        10: [call(20, 10, 'workspace', { action: 'submit' })],
+        11: [call(21, 11, 'bash', { command: 'curl -s http://127.0.0.1:8080/' })],
+        12: [call(22, 12, 'bash', { command: 'git commit -qm x' })],
+        14: [call(23, 14, 'bash', { command: 'git commit -qm y' })],
+      },
+      board: { messages: [] },
+    },
+    words,
+    { landFailedFirst: { gate: 'finding' } },
+  )
+  assert.deepEqual(card.coordinators.map((c) => [c.id, c.landed, c.nothingToLand ?? false]), [
+    [10, false, false],
+    [11, false, true],
+    [12, false, false],
+    [13, false, false],
+  ])
+  assert.deepEqual(card.featuresWithCoordinator, { search: [10, 12, 13] })
+  assert.equal(everyLanded(card.coordinators), false)
+  assert.equal(everyLanded(card.coordinators.filter((c) => c.id === 11)), true)
 })
 
 test('reminder: created, fired, heard after the fire; the board has no pending reply or repeat', async () => {

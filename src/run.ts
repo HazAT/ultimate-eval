@@ -20,7 +20,7 @@ import { decide, shapeAnswers, simDue, SIM_EFFORT, SIM_MODEL, SIM_PROMPT_SHA, tu
 import type { Card, Decision, Said } from './sim.ts'
 import { coordinatorsOf, planOf, writeLive } from './live.ts'
 import type { Live, Phase } from './live.ts'
-import { answerText, gateFailed, peerChecks, readExpect, score } from './score.ts'
+import { answerText, everyLanded, gateFailed, peerChecks, readExpect, score } from './score.ts'
 import type { Automation, Scorecard } from './score.ts'
 import { readSetup, seedUserHome, verifyModels } from './setup.ts'
 
@@ -706,7 +706,7 @@ export async function run(options: RunOptions) {
     const models = verifyModels(setup, card.modelsByRole)
     const simCost = simLog.reduce((n, s) => n + (s.costUsd ?? 0), 0)
     const allLanded =
-      (card.coordinators.length > 0 || !!expect.branchOptional) && card.coordinators.every((c) => c.landed)
+      (card.coordinators.length > 0 || !!expect.branchOptional) && everyLanded(card.coordinators)
     if (cancelled) throw new Error('cancelled')
     const pass =
       !failure &&

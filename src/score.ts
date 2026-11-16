@@ -45,7 +45,15 @@ type ModelUsage = {
 }
 
 export type Scorecard = {
-  coordinators: { id: number; title?: string; intent?: string; features: string[]; landed: boolean }[]
+  coordinators: {
+    id: number
+    title?: string
+    intent?: string
+    features: string[]
+    landed: boolean
+    /** It made no change to land: no commit, no `workspace submit`, no lander report, in it or its subagents. */
+    nothingToLand?: true
+  }[]
   featuresWithCoordinator: Record<string, number[]>
   workers: { total: number; byCoordinator: Record<number, number> }
   plans: { coordinatorsWithPlan: number; epics: number; tasks: number }
@@ -259,6 +267,24 @@ export function roleOf(c: Summary, ultimate: number, coordinators: Set<number>, 
   return agent ?? 'unknown'
 }
 
+/**
+ * Whether a coordinator made changes that need landing: a commit, a `workspace submit` or a lander report in its
+ * history or a subagent's. A read-only check (run 20261116t2152-7233760-sc2r, #632) has none and nothing to land.
+ */
+export function madeChanges(data: Pick<Collected, 'conversations' | 'histories'>, id: number): boolean {
+  const children = data.conversations.filter((c) => c.parentConversationId === id && c.label !== 'lander')
+  const changed = (data.histories[id] ?? []).some(
+    (e) =>
+      e.kind === 'workspaces.lander-report' ||
+      toolCalls(e).some((call) => commits(call) || (call.name === 'workspace' && call.arguments?.action === 'submit')),
+  )
+  return changed || children.some((c) => madeChanges(data, c.id))
+}
+
+/** Every coordinator that made changes landed; one with nothing to land needs no landing. */
+export const everyLanded = (coordinators: Scorecard['coordinators']) =>
+  coordinators.every((c) => c.landed || c.nothingToLand)
+
 export function score(data: Collected, featureWords: Record<string, RegExp>, expect: Expect = {}): Scorecard {
   const minutes = (at: number) => Math.round(((at - data.firstPromptAt) / 60000) * 10) / 10
   const root = data.histories[1] ?? []
@@ -271,6 +297,7 @@ export function score(data: Collected, featureWords: Record<string, RegExp>, exp
   const coordinators = branched.map((e) => {
     const { branch, intent } = e.data as { branch: number; intent?: string }
     const title = byId.get(branch)?.title
+    const landed = landedFrom.has(branch)
     return {
       id: branch,
       title,
@@ -279,12 +306,15 @@ export function score(data: Collected, featureWords: Record<string, RegExp>, exp
         const fromIntent = featuresOf(intent ?? '', featureWords)
         return fromIntent.length ? fromIntent : featuresOf(title ?? '', featureWords)
       })(),
-      landed: landedFrom.has(branch),
+      landed,
+      ...(landed || madeChanges(data, branch) ? {} : { nothingToLand: true as const }),
     }
   })
   const featuresWithCoordinator: Record<string, number[]> = {}
   for (const name of Object.keys(featureWords))
-    featuresWithCoordinator[name] = coordinators.filter((c) => c.features.includes(name)).map((c) => c.id)
+    featuresWithCoordinator[name] = coordinators
+      .filter((c) => !c.nothingToLand && c.features.includes(name))
+      .map((c) => c.id)
 
   const byCoordinator: Record<number, number> = {}
   for (const c of data.conversations)
@@ -414,7 +444,7 @@ export function score(data: Collected, featureWords: Record<string, RegExp>, exp
           : []
       })
     })
-    const allLanded = coordinators.length > 0 && coordinators.every((c) => c.landed)
+    const allLanded = coordinators.length > 0 && everyLanded(coordinators)
     checks.push({
       name: 'landed after a failed landing check',
       pass: failed.length > 0 && allLanded,

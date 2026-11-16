@@ -1,14 +1,14 @@
 /**
  * Rebuild a finished run's scorecard from what it stored (transcripts, the Messages log, the stopped home's sqlite),
  * so a new check or category reaches older runs. Checks on the project itself (`untouched`) need the deleted project:
- * an earlier result of one is kept. A run that now fails a `pass` gate is marked failed; a rescore never turns a
- * failed run into a pass.
+ * an earlier result of one is kept. A run that now fails a `pass` gate is marked failed; a rescore turns a failed run
+ * into a pass only when `allLanded` now holds where it did not, and every other part of `pass` holds too.
  */
 import { existsSync, readdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import type { Entry, Message, Summary } from './api.ts'
 import { agentProfiles, automationsOf, ROOT } from './run.ts'
-import { gateFailed, peerChecks, readExpect, score } from './score.ts'
+import { everyLanded, gateFailed, peerChecks, readExpect, score } from './score.ts'
 import type { Scorecard } from './score.ts'
 
 export async function rescore(dir: string) {
@@ -28,6 +28,7 @@ export async function rescore(dir: string) {
   const ultimate = conversations.find((c) => c.title === '@ultimate')?.id
   if (!ultimate) throw new Error(`${dir}: no @ultimate among the conversations`)
   const before = result.scorecard as Scorecard
+  const expect = readExpect(scenarioDir)
   const card = score(
     {
       conversations,
@@ -39,7 +40,7 @@ export async function rescore(dir: string) {
       automations: automationsOf(join(dir, 'home', 'state.sqlite')),
     },
     FEATURE_WORDS,
-    readExpect(scenarioDir),
+    expect,
   )
   card.checks.push(...(before.checks ?? []).filter((c) => c.name === 'no unrelated files changed'))
   const peers = join(dir, 'peers')
@@ -49,6 +50,19 @@ export async function rescore(dir: string) {
     card.checks.push(...peerChecks(name, peerBoard, existsSync(log) ? readFileSync(log, 'utf8') : ''))
   }
   result.scorecard = card
+  const allLanded = (card.coordinators.length > 0 || !!expect.branchOptional) && everyLanded(card.coordinators)
+  // Run 20261116t2152-7233760-sc2r failed only on a read-only coordinator with nothing to land: the parts of `pass`
+  // the run computed, from what the result stored.
+  if (allLanded && result.allLanded === false)
+    result.pass =
+      !result.failure &&
+      Object.values(result.models ?? {}).every((m) => (m as { status?: string }).status !== 'mismatch') &&
+      !!result.simDone &&
+      (result.acceptance ?? []).every((c: { pass: boolean }) => c.pass) &&
+      result.projectTests?.pass === true &&
+      result.noRemote !== false &&
+      card.landings.pushed.length === 0
+  result.allLanded = allLanded
   if (gateFailed(card)) result.pass = false
   writeFileSync(resultPath, JSON.stringify(result, null, 2))
   return result
