@@ -380,6 +380,11 @@ test('tell: delivered, answered and heard gate the run; the peer side is finding
   const failed = score(data([{ ...tell, state: 'failed', remote }], []), {}, expect)
   assert.deepEqual(failed.checks.filter((c) => c.gate === 'pass').map((c) => c.pass), [false, false, false])
   assert.equal(gateFailed(failed), true)
+  // A stopped tell's failure reply comes first; the guess after it, before the retry's real answer, is not hearing it.
+  const stopped: Message = { ...tell, id: 2, at: 1_000, state: 'stopped' }
+  const failure: Message = { ...answer, id: 3, at: 2_000, re: 2, text: 'Stopped.' }
+  const retried = score(data([stopped, failure, tell, answer], [said(5_000, '/kitchen/v2/recipe-cards, I think')]), {}, expect)
+  assert.equal(by(retried.checks)["the user heard recipes-api's answer"], false)
 
   // The peer: one tell received and answered, no card to its user, a clean log.
   const received: Message = { id: 1, from: 'remote', to: 3, text: tell.text, at: 11_000, reply: true, state: 'answered', remote }

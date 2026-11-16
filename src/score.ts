@@ -432,8 +432,10 @@ export function score(data: Collected, featureWords: Record<string, RegExp>, exp
       (m) => m.from === data.ultimate && m.to === 'remote' && m.remote?.project === project,
     )
     const delivered = told.filter((m) => m.remote?.id !== undefined && m.state !== 'failed')
+    // A failed or stopped tell gets a reply too, its failure: only replies to tells that settled answered count.
+    const answered = told.filter((m) => m.state === 'answered')
     const answers = data.board.messages.filter(
-      (m) => m.from === 'remote' && !m.interim && told.some((t) => t.id === m.re),
+      (m) => m.from === 'remote' && !m.interim && answered.some((t) => t.id === m.re),
     )
     const answeredAt = Math.min(...answers.map((m) => m.at))
     const heard = new RegExp(expect.tell.heard, 'i')
@@ -451,7 +453,7 @@ export function score(data: Collected, featureWords: Record<string, RegExp>, exp
     })
     checks.push({
       name: `${project} answered the tell`,
-      pass: answers.length > 0 && told.some((m) => m.state === 'answered'),
+      pass: answers.length > 0,
       gate,
       detail: answers.length ? `answer ${answers.map((m) => m.id).join(', ')}` : 'no answer',
     })
