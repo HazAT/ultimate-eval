@@ -6,7 +6,7 @@ import { shapeAnswers, simDue } from '../src/sim.ts'
 import { commits, errorCategory, findings, gateFailed, score } from '../src/score.ts'
 import { groups, median, readPublished, table } from '../src/report.ts'
 import { exportResults, scan } from '../src/export.ts'
-import { coordinatorsOf, planOf, status, writeLive } from '../src/live.ts'
+import { coordinatorsOf, planOf, progress, status, writeLive } from '../src/live.ts'
 import type { Live } from '../src/live.ts'
 import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
@@ -466,6 +466,12 @@ test('status lists unfinished runs whose runner is alive, compact, with the A/B 
   })
   assert.deepEqual(status(join(dir, 'missing'), () => true), { runs: [] })
   assert.deepEqual([planOf('2/4'), planOf(undefined), planOf('5/4'), planOf('0/4'), planOf('x')], [{ index: 2, total: 4 }, undefined, undefined, undefined, undefined])
+
+  // progress: the newest live run's plan place, else its repeat; null with none.
+  assert.equal(progress(join(dir, 'missing'), () => true), null)
+  assert.deepEqual(progress(dir, (pid) => pid === 4242), { label: 'run', index: 2, total: 4 })
+  write('20261115t2200-abc1234-ffff', { launchedAt: 3000 })
+  assert.deepEqual(progress(dir, (pid) => pid === 4242), { label: 'run', index: 2, total: 3 })
 })
 
 test('export publishes only allowlisted fields of finished runs, and the scan refuses leaks', () => {

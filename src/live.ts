@@ -90,6 +90,12 @@ export function status(runsDir: string, alive: (pid: unknown) => boolean) {
   return { runs: runs.sort((a, b) => b.startedAt - a.startedAt).slice(0, STATUS_RUNS) }
 }
 
+/** The newest run in progress as one step, for Ultimate's `status/status`: its A/B plan place, else its repeat; null when none. */
+export function progress(runsDir: string, alive: (pid: unknown) => boolean): { label: string; index: number; total: number } | null {
+  const r = status(runsDir, alive).runs[0]
+  return r ? { label: 'run', ...(r.plan ?? r.repeat) } : null
+}
+
 /** Replace `path` atomically, so a reader never sees half a file. */
 export function writeLive(path: string, live: Live) {
   const tmp = `${path}.tmp`
