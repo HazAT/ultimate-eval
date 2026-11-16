@@ -95,6 +95,89 @@ export type Expect = {
   untouched?: { paths: string[]; gate: Gate }
   /** An automation was created, it fired, and something the user sees came after its first fire. */
   reminder?: { gate: Gate }
+  /**
+   * @ultimate told `project` (`ultimate.tell`), the tell was delivered and answered, and after the answer the user saw
+   * text matching `heard` (a case-insensitive regular expression).
+   */
+  tell?: { project: string; heard: string; gate: Gate }
+  /** Every branch must land, but none is fine: the task is small enough for @ultimate to do alone. */
+  branchOptional?: boolean
+}
+
+/** A reply-expected message nobody answered, and the same text sent twice, on one Messages log. */
+export function boardChecks(board: { messages: Message[] }, prefix = ''): Check[] {
+  const pending = board.messages.filter((m) => m.reply && ['sent', 'delivered', 'failed'].includes(m.state))
+  const firstOf = new Map<string, number>()
+  const twice: string[] = []
+  for (const m of board.messages) {
+    const key = `${m.from}|${m.to}|${m.text.trim()}`
+    if (firstOf.has(key)) twice.push(`${m.id} repeats ${firstOf.get(key)}`)
+    else firstOf.set(key, m.id)
+  }
+  return [
+    {
+      name: `${prefix}every reply-expected message answered`,
+      pass: !pending.length,
+      gate: 'finding',
+      detail: pending.length
+        ? pending.map((m) => `${m.id} ${m.from}→${m.to} ${m.state}`).join('; ')
+        : `${board.messages.filter((m) => m.reply).length} answered`,
+    },
+    {
+      name: `${prefix}no message sent twice`,
+      pass: !twice.length,
+      gate: 'finding',
+      detail: twice.length ? twice.join('; ') : `${board.messages.length} messages`,
+    },
+  ]
+}
+
+/** The `warn` and `error` lines of a supervisor log (JSON lines). */
+export function logProblems(text: string) {
+  return text.split('\n').filter((line) => {
+    try {
+      return ['warn', 'error'].includes((JSON.parse(line) as { level?: string }).level ?? '')
+    } catch {
+      return false
+    }
+  })
+}
+
+/**
+ * The other side of a tell, all findings: the peer project `name` received one message from another project, answered
+ * it, asked its own user nothing (nobody is there), left its board clean, and its supervisor logged no problem.
+ */
+export function peerChecks(name: string, board: { messages: Message[] }, supervisorLog: string): Check[] {
+  const received = board.messages.filter((m) => m.from === 'remote' && m.re === undefined)
+  const asked = board.messages.filter((m) => m.to === 'user' && m.reply)
+  const problems = logProblems(supervisorLog)
+  return [
+    {
+      name: `${name}: received one tell`,
+      pass: received.length === 1,
+      gate: 'finding',
+      detail: received.map((m) => `${m.id} ${m.state}`).join('; ') || 'none',
+    },
+    {
+      name: `${name}: answered the tell`,
+      pass: received.length > 0 && received.every((m) => m.state === 'answered'),
+      gate: 'finding',
+      detail: received.map((m) => `${m.id} ${m.state}`).join('; ') || 'none',
+    },
+    {
+      name: `${name}: asked its user nothing`,
+      pass: !asked.length,
+      gate: 'finding',
+      detail: asked.map((m) => `${m.id}: ${m.text.slice(0, 120)}`).join('; ') || 'no cards',
+    },
+    ...boardChecks(board, `${name}: `),
+    {
+      name: `${name}: supervisor log clean`,
+      pass: !problems.length,
+      gate: 'finding',
+      detail: problems.length ? problems.slice(0, 3).map((l) => l.slice(0, 200)).join('; ') : 'no warn or error lines',
+    },
+  ]
 }
 
 /**
@@ -341,28 +424,44 @@ export function score(data: Collected, featureWords: Record<string, RegExp>, exp
   }
 
   // The Messages log at the end: a reply-expected message nobody answered, and the same text sent twice.
-  const pending = data.board.messages.filter((m) => m.reply && ['sent', 'delivered', 'failed'].includes(m.state))
-  checks.push({
-    name: 'every reply-expected message answered',
-    pass: !pending.length,
-    gate: 'finding',
-    detail: pending.length
-      ? pending.map((m) => `${m.id} ${m.from}→${m.to} ${m.state}`).join('; ')
-      : `${data.board.messages.filter((m) => m.reply).length} answered`,
-  })
-  const firstOf = new Map<string, number>()
-  const twice: string[] = []
-  for (const m of data.board.messages) {
-    const key = `${m.from}|${m.to}|${m.text.trim()}`
-    if (firstOf.has(key)) twice.push(`${m.id} repeats ${firstOf.get(key)}`)
-    else firstOf.set(key, m.id)
+  checks.push(...boardChecks(data.board))
+
+  if (expect.tell) {
+    const { project, gate } = expect.tell
+    const told = data.board.messages.filter(
+      (m) => m.from === data.ultimate && m.to === 'remote' && m.remote?.project === project,
+    )
+    const delivered = told.filter((m) => m.remote?.id !== undefined && m.state !== 'failed')
+    const answers = data.board.messages.filter(
+      (m) => m.from === 'remote' && !m.interim && told.some((t) => t.id === m.re),
+    )
+    const answeredAt = Math.min(...answers.map((m) => m.at))
+    const heard = new RegExp(expect.tell.heard, 'i')
+    const seen = [
+      ...data.board.messages.filter((m) => m.to === 'user' && m.at >= answeredAt).map((m) => m.text),
+      ...heardAnswers(data.histories[data.ultimate] ?? [], 0, data.board, data.ultimate, false, textOf)
+        .answers.filter((a) => (a.at ?? 0) >= answeredAt)
+        .map((a) => a.text),
+    ]
+    checks.push({
+      name: `told ${project}, delivered`,
+      pass: delivered.length > 0,
+      gate,
+      detail: told.map((m) => `${m.id} ${m.state}${m.remote?.id !== undefined ? ` as ${m.remote.id}` : ''}`).join('; ') || 'no tell',
+    })
+    checks.push({
+      name: `${project} answered the tell`,
+      pass: answers.length > 0 && told.some((m) => m.state === 'answered'),
+      gate,
+      detail: answers.length ? `answer ${answers.map((m) => m.id).join(', ')}` : 'no answer',
+    })
+    checks.push({
+      name: `the user heard ${project}'s answer`,
+      pass: answers.length > 0 && seen.some((text) => heard.test(text)),
+      gate,
+      detail: !answers.length ? 'no answer' : `${seen.length} messages after it, ${seen.filter((t) => heard.test(t)).length} name it`,
+    })
   }
-  checks.push({
-    name: 'no message sent twice',
-    pass: !twice.length,
-    gate: 'finding',
-    detail: twice.length ? twice.join('; ') : `${data.board.messages.length} messages`,
-  })
 
   const automations = data.automations ?? []
   if (expect.reminder) {

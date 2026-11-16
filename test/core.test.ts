@@ -3,7 +3,7 @@ import assert from 'node:assert/strict'
 import { applyOps, heardAnswers, openQuestions } from '../src/api.ts'
 import type { Entry, Message } from '../src/api.ts'
 import { shapeAnswers, simDue } from '../src/sim.ts'
-import { commits, errorCategory, findings, gateFailed, score } from '../src/score.ts'
+import { commits, errorCategory, findings, gateFailed, peerChecks, score } from '../src/score.ts'
 import { groups, median, readPublished, table } from '../src/report.ts'
 import { exportResults, scan } from '../src/export.ts'
 import { coordinatorsOf, planOf, progress, status, writeLive } from '../src/live.ts'
@@ -347,6 +347,50 @@ test('reminder: created, fired, heard after the fire; the board has no pending r
     none.checks.filter((c) => c.gate === 'pass').map((c) => c.pass),
     [false, false, false],
   )
+})
+
+test('tell: delivered, answered and heard gate the run; the peer side is findings', () => {
+  const remote = { project: 'recipes-api', machine: 'm', key: 'k1' }
+  const tell: Message = { id: 4, from: 2, to: 'remote', text: 'Which endpoint lists recipes?', at: 10_000, reply: true, state: 'answered', remote: { ...remote, id: 1 } }
+  const answer: Message = { id: 5, from: 'remote', to: 2, text: 'GET /kitchen/v2/recipe-cards', at: 20_000, reply: false, state: 'delivered', re: 4, remote }
+  const said = (at: number, text: string): Entry => ({
+    id: at,
+    kind: 'pi.assistant',
+    conversationId: 2,
+    model: [{ role: 'assistant', stopReason: 'stop', timestamp: at, content: [{ type: 'text', text }] }],
+  })
+  const data = (messages: Message[], answers: Entry[]) => ({
+    ultimate: 2,
+    firstPromptAt: 0,
+    conversations: [{ id: 2, busy: false, title: '@ultimate' }],
+    histories: { 1: [], 2: answers },
+    board: { messages },
+  })
+  const expect = { tell: { project: 'recipes-api', heard: '/kitchen/v2/recipe-cards', gate: 'pass' as const } }
+  const by = (checks: { name: string; pass: boolean }[]) => Object.fromEntries(checks.map((c) => [c.name, c.pass]))
+
+  const ok = score(data([tell, answer], [said(30_000, 'It is /kitchen/v2/recipe-cards; the README has it.')]), {}, expect)
+  assert.deepEqual(
+    ok.checks.filter((c) => c.gate === 'pass').map((c) => [c.name, c.pass]),
+    [['told recipes-api, delivered', true], ['recipes-api answered the tell', true], ["the user heard recipes-api's answer", true]],
+  )
+  // Said before the answer arrived (a guess) is not hearing it; a failed post is not delivered.
+  const guessed = score(data([tell, answer], [said(15_000, '/kitchen/v2/recipe-cards, I think')]), {}, expect)
+  assert.equal(by(guessed.checks)["the user heard recipes-api's answer"], false)
+  const failed = score(data([{ ...tell, state: 'failed', remote }], []), {}, expect)
+  assert.deepEqual(failed.checks.filter((c) => c.gate === 'pass').map((c) => c.pass), [false, false, false])
+  assert.equal(gateFailed(failed), true)
+
+  // The peer: one tell received and answered, no card to its user, a clean log.
+  const received: Message = { id: 1, from: 'remote', to: 3, text: tell.text, at: 11_000, reply: true, state: 'answered', remote }
+  const clean = peerChecks('recipes-api', { messages: [received] }, '{"level":"info","text":"ready"}\n')
+  assert.ok(clean.every((c) => c.pass && c.gate === 'finding'), JSON.stringify(clean))
+  const card: Message = { id: 2, from: 3, to: 'user', text: 'Which project asked?', at: 12_000, reply: true, state: 'delivered' }
+  const messy = by(peerChecks('recipes-api', { messages: [{ ...received, state: 'delivered' }, card] }, '{"level":"error","text":"boom"}'))
+  assert.equal(messy['recipes-api: answered the tell'], false)
+  assert.equal(messy['recipes-api: asked its user nothing'], false)
+  assert.equal(messy['recipes-api: every reply-expected message answered'], false)
+  assert.equal(messy['recipes-api: supervisor log clean'], false)
 })
 
 test('each configured role is checked against what ran: ok, mismatch or not exercised', async () => {

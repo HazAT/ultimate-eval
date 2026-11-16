@@ -54,16 +54,16 @@ export function verifyModels(setup: Setup, ranByRole: Record<string, string[]>) 
 }
 
 /**
- * Seed `<userHome>/.ultimate`: settings (no onboarding, no self-update of the temporary clone), the project's trust
- * (so its lander checks apply, as when the user trusts it), the families, and one overlay per role.
+ * Seed `<userHome>/.ultimate`: settings (no onboarding, no self-update of the temporary clone), the projects' trust
+ * (so their lander checks apply, as when the user trusts them), the families, and one overlay per role.
  */
-export function seedUserHome(userHome: string, project: string, setup: Setup) {
+export function seedUserHome(userHome: string, projects: string[], setup: Setup) {
   const dir = join(userHome, '.ultimate')
   mkdirSync(join(dir, 'agents'), { recursive: true, mode: 0o700 })
   const json = (name: string, value: unknown) =>
     writeFileSync(join(dir, name), JSON.stringify(value, null, 2) + '\n')
   json('settings.json', { onboarding: false, extensions: { disable: ['update'] } })
-  json('trust.json', { [project]: true })
+  json('trust.json', Object.fromEntries(projects.map((p) => [p, true])))
   json('model-families.json', { recent: { families: setup.families } })
   for (const [role, family] of Object.entries(setup.roles))
     writeFileSync(

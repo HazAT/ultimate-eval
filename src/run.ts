@@ -2,7 +2,8 @@
  * One eval run: a temporary clone of the Ultimate commit under test, a fresh project from the scenario's fixture (no
  * remote), a supervised scratch Ultimate on its own home and an empty user home (logins are read in place through
  * the real HOME, never copied), the simulated user talking to it over HTTP, then the hidden acceptance spec on the
- * project's `main`. Everything temporary lives in /tmp/ue-run-<id> and is deleted afterwards, including Claude Code's
+ * project's `main`. A scenario's `peers/<name>/` are more projects, each with its own scratch Ultimate that nobody talks
+ * to: every home sits in the user home's `.ultimate/projects/`, where Ultimate finds the others to `tell` them. Everything temporary lives in /tmp/ue-run-<id> and is deleted afterwards, including Claude Code's
  * session logs for those paths.
  */
 import { execFileSync, spawn } from 'node:child_process'
@@ -19,7 +20,7 @@ import { decide, shapeAnswers, simDue, SIM_EFFORT, SIM_MODEL, SIM_PROMPT_SHA, tu
 import type { Card, Decision, Said } from './sim.ts'
 import { coordinatorsOf, planOf, writeLive } from './live.ts'
 import type { Live, Phase } from './live.ts'
-import { answerText, gateFailed, readExpect, score } from './score.ts'
+import { answerText, gateFailed, peerChecks, readExpect, score } from './score.ts'
 import type { Automation, Scorecard } from './score.ts'
 import { readSetup, seedUserHome, verifyModels } from './setup.ts'
 
@@ -212,6 +213,7 @@ export async function run(options: RunOptions) {
   const said: Said[] = []
   let server: ChildProcess | undefined
   let instance: Instance | undefined
+  const peers: { name: string; started: { child: ChildProcess; exited: boolean }; instance?: Instance }[] = []
   let failure: Failure | undefined
   // doneRefusedAt/doneAcceptedAt (ISO) make any gap between the user's first "done" and the accepted one visible.
   let simDone: { atMin: number; why: string; doneRefusedAt?: string; doneAcceptedAt: string } | undefined
@@ -301,38 +303,61 @@ export async function run(options: RunOptions) {
     git('-c', 'user.name=Eval User', '-c', 'user.email=eval@example.com', 'commit', '-q', '-m', 'Recipe list')
     const fixtureCommit = git('rev-parse', 'HEAD')
 
-    const home = join(tmp, 'home')
-    const userHome = join(tmp, 'user')
-    mkdirSync(home)
-    seedUserHome(userHome, project, setup)
-
-    const port = await freePort()
-    const base = `http://127.0.0.1:${port}`
-    publish({ phase: 'starting', url: base })
-    log(`starting ${base}`)
-    if (cancelled) throw new Error('cancelled')
-    server = spawn(process.execPath, ['bin/ultimate.ts', project, '--port', String(port), '--no-open'], {
-      cwd: clone,
-      detached: true,
-      stdio: ['ignore', 'ignore', 'ignore'],
-      env: {
-        ...cleanEnv(),
-        ULTIMATE_HOME: home,
-        ULTIMATE_USER_HOME: userHome,
-        ULTIMATE_NO_OPEN: '1',
-      },
-    })
-    groups.add(server)
-    let exited = false
-    server.on('exit', () => (exited = true))
-    for (let i = 0; ; i++) {
-      if (cancelled) throw new Error('cancelled')
-      if (exited) throw new Error('the scratch server exited while starting')
-      if (i > 480) throw new Error('the scratch server did not become ready in 2 minutes')
-      const ok = await fetch(`${base}/api/models`).then((r) => r.ok, () => false)
-      if (ok) break
-      await new Promise((d) => setTimeout(d, 250))
+    // The other projects: each fixture its own repository, named by its folder as Ultimate names a project.
+    const peersDir = join(scenarioDir, 'peers')
+    const peerNames = existsSync(peersDir) ? readdirSync(peersDir).sort() : []
+    for (const name of peerNames) {
+      const root = join(tmp, 'peers', name)
+      cpSync(join(peersDir, name), root, { recursive: true, dereference: true })
+      sh('git', ['init', '-q', '-b', 'main'], root)
+      sh('git', ['add', '-A'], root)
+      sh('git', ['-c', 'user.name=Eval User', '-c', 'user.email=eval@example.com', 'commit', '-q', '-m', name], root)
     }
+
+    const userHome = join(tmp, 'user')
+    const homeOf = (name: string) => join(userHome, '.ultimate', 'projects', name)
+    const home = homeOf('project')
+    seedUserHome(userHome, [project, ...peerNames.map((name) => join(tmp, 'peers', name))], setup)
+
+    /** Start a supervised scratch Ultimate on `root` with its own home and port; resolves once it serves. */
+    const startInstance = async (root: string, name: string) => {
+      mkdirSync(homeOf(name), { recursive: true })
+      const base = `http://127.0.0.1:${await freePort()}`
+      log(`starting ${name} at ${base}`)
+      if (cancelled) throw new Error('cancelled')
+      const child = spawn(process.execPath, ['bin/ultimate.ts', root, '--port', new URL(base).port, '--no-open'], {
+        cwd: clone,
+        detached: true,
+        stdio: ['ignore', 'ignore', 'ignore'],
+        env: { ...cleanEnv(), ULTIMATE_HOME: homeOf(name), ULTIMATE_USER_HOME: userHome, ULTIMATE_NO_OPEN: '1' },
+      })
+      groups.add(child)
+      const state = { child, base, exited: false }
+      child.on('exit', () => (state.exited = true))
+      for (let i = 0; ; i++) {
+        if (cancelled) throw new Error('cancelled')
+        if (state.exited) throw new Error(`the scratch server of ${name} exited while starting`)
+        if (i > 480) throw new Error(`the scratch server of ${name} did not become ready in 2 minutes`)
+        if (await fetch(`${base}/api/models`).then((r) => r.ok, () => false)) break
+        await new Promise((d) => setTimeout(d, 250))
+      }
+      return state
+    }
+
+    publish({ phase: 'starting' })
+    // The peers first, so the project's first prompt already lists them.
+    for (const name of peerNames) {
+      const started = await startInstance(join(tmp, 'peers', name), name)
+      const peer = new Instance(started.base)
+      peers.push({ name, started, instance: peer })
+      await peer.watch(1, ['board'])
+      await peer.open()
+    }
+    const started = await startInstance(project, 'project')
+    server = started.child
+    const base = started.base
+    const exited = () => started.exited || peers.some((p) => p.started.exited)
+    publish({ url: base })
 
     publish({ phase: 'opening' })
     instance = new Instance(base)
@@ -355,6 +380,15 @@ export async function run(options: RunOptions) {
     // Set while the simulated user's "done" stands refused: the loop then polls fast and re-asks once Ultimate is idle.
     let doneRefusedAt = 0
 
+    // Anything working anywhere: the project, or a peer answering a tell.
+    const busyAnywhere = () => instance!.busy() || peers.some((p) => p.instance?.busy())
+    const progressAt = () => Math.max(instance!.lastProgress, ...peers.map((p) => p.instance?.lastProgress ?? 0))
+    const downSince = () =>
+      [instance!, ...peers.map((p) => p.instance)].reduce<number | undefined>(
+        (min, i) => (i?.downSince ? Math.min(min ?? Infinity, i.downSince) : min),
+        undefined,
+      )
+
     const ask = async (opening: boolean) => {
       const board = instance!.doc<{ messages: Message[] }>(1, 'board')
       const cards: Card[] = openQuestions(board).map((m) => ({
@@ -369,7 +403,7 @@ export async function run(options: RunOptions) {
         scenario: scenarioText,
         said,
         cards,
-        busy: instance!.busy(),
+        busy: busyAnywhere(),
         minutes,
         quietMinutes,
         opening,
@@ -415,11 +449,12 @@ export async function run(options: RunOptions) {
         failure = { reason: 'cancelled', atMin: elapsedMin, detail: 'interrupted', stuck: lastStuck }
         break
       }
-      if (exited) {
-        failure = { reason: 'crash', atMin: elapsedMin, detail: 'the scratch supervisor exited', stuck: lastStuck }
+      if (exited()) {
+        failure = { reason: 'crash', atMin: elapsedMin, detail: 'a scratch supervisor exited', stuck: lastStuck }
         break
       }
-      if (instance.downSince && now - instance.downSince > DOWN_MIN * 60000) {
+      const down = downSince()
+      if (down && now - down > DOWN_MIN * 60000) {
         failure = {
           reason: 'crash',
           atMin: elapsedMin,
@@ -428,7 +463,7 @@ export async function run(options: RunOptions) {
         }
         break
       }
-      if (instance.downSince) continue // restarting: wait for it to come back
+      if (down) continue // restarting: wait for it to come back
       // What the user sees: every message to the user (cards and one-way), and @ultimate's final answers.
       let news = false
       for (const message of instance.doc<{ messages: Message[] }>(1, 'board')?.messages ?? []) {
@@ -459,9 +494,12 @@ export async function run(options: RunOptions) {
       // Where it stands, kept from the last time the instance answered, for whatever failure comes.
       lastStuck = {
         busy: instance.conversations.filter((c) => c.busy).map((c) => ({ id: c.id, title: c.title, label: c.label })),
+        ...(peers.length
+          ? { peersBusy: peers.filter((p) => p.instance?.busy()).map((p) => p.name) }
+          : {}),
         open: openQuestions(instance.doc(1, 'board')).map((m) => ({ id: m.id, from: m.from, text: m.text.slice(0, 300) })),
         lastSaid: said.at(-1),
-        lastProgressMin: Math.round(((now - Math.max(instance.lastProgress, lastNews)) / 60000) * 10) / 10,
+        lastProgressMin: Math.round(((now - Math.max(progressAt(), lastNews)) / 60000) * 10) / 10,
       }
       publish({
         said,
@@ -481,7 +519,7 @@ export async function run(options: RunOptions) {
         failure = { reason: 'timeout', atMin: elapsedMin, detail: `not done in ${BUDGET_MIN} minutes`, stuck: lastStuck }
         break
       }
-      const quiet = (now - Math.max(instance.lastProgress, lastNews)) / 60000
+      const quiet = (now - Math.max(progressAt(), lastNews)) / 60000
       // A scheduled fire still ahead is a wait everyone agreed on (a reminder), not a hang: the budget still bounds it.
       if (quiet > HANG_MIN && !(await scheduledFireAhead(instance))) {
         failure = { reason: 'hang', atMin: elapsedMin, detail: `nothing new for ${HANG_MIN} minutes`, stuck: lastStuck }
@@ -489,7 +527,7 @@ export async function run(options: RunOptions) {
       }
 
       const open = openQuestions(instance.doc(1, 'board'))
-      const idle = !instance.busy()
+      const idle = !busyAnywhere()
       const due = simDue({ news, idle, openCards: open.length, sinceSimMs: now - lastSimAt, doneRefused: !!doneRefusedAt })
       if (!due) continue
       if (calls >= MAX_SIM_CALLS) {
@@ -546,7 +584,7 @@ export async function run(options: RunOptions) {
           log(`answer refused: ${String(error)}`)
         }
       } else if (decision.action === 'done') {
-        if (!instance.busy() && !openQuestions(instance.doc(1, 'board')).length) {
+        if (!busyAnywhere() && !openQuestions(instance.doc(1, 'board')).length) {
           simDone = {
             atMin: afterMin,
             why: decision.why,
@@ -576,12 +614,34 @@ export async function run(options: RunOptions) {
     writeFileSync(join(out, 'transcripts', 'conversations.json'), JSON.stringify(conversations, null, 1))
     instance.close()
     instance = undefined
+    // Each peer the same way, into runs/<id>/peers/<name>/.
+    const peerData: { name: string; board: { messages: Message[] }; dir: string }[] = []
+    for (const peer of peers) {
+      const dir = join(out, 'peers', peer.name)
+      mkdirSync(join(dir, 'transcripts'), { recursive: true })
+      for (const c of peer.instance!.conversations)
+        writeFileSync(
+          join(dir, 'transcripts', `${c.id}.json`),
+          JSON.stringify(await peer.instance!.history(c.id).catch(() => [])),
+        )
+      const peerBoard = peer.instance!.doc<{ messages: Message[] }>(1, 'board') ?? { messages: [] }
+      writeFileSync(join(dir, 'transcripts', 'board.json'), JSON.stringify(peerBoard, null, 1))
+      writeFileSync(join(dir, 'transcripts', 'conversations.json'), JSON.stringify(peer.instance!.conversations, null, 1))
+      peer.instance!.close()
+      peer.instance = undefined
+      peerData.push({ name: peer.name, board: peerBoard, dir })
+    }
     await stopGroup(server)
-    for (const name of ['state.sqlite', 'state.sqlite-wal', 'trace.sqlite', 'trace.sqlite-wal', 'supervisor.log'])
-      if (existsSync(join(home, name))) {
-        mkdirSync(join(out, 'home'), { recursive: true })
-        cpSync(join(home, name), join(out, 'home', name))
-      }
+    for (const peer of peers) await stopGroup(peer.started.child)
+    const keepHome = (from: string, to: string) => {
+      for (const name of ['state.sqlite', 'state.sqlite-wal', 'trace.sqlite', 'trace.sqlite-wal', 'supervisor.log'])
+        if (existsSync(join(from, name))) {
+          mkdirSync(to, { recursive: true })
+          cpSync(join(from, name), join(to, name))
+        }
+    }
+    keepHome(home, join(out, 'home'))
+    for (const peer of peerData) keepHome(homeOf(peer.name), join(peer.dir, 'home'))
     const agents = agentProfiles(join(home, 'state.sqlite'))
     const automations = automationsOf(join(home, 'state.sqlite'))
     const card: Scorecard = score(
@@ -589,6 +649,10 @@ export async function run(options: RunOptions) {
       FEATURE_WORDS,
       expect,
     )
+    for (const peer of peerData) {
+      const supervisor = join(peer.dir, 'home', 'supervisor.log')
+      card.checks.push(...peerChecks(peer.name, peer.board, existsSync(supervisor) ? readFileSync(supervisor, 'utf8') : ''))
+    }
     if (expect.untouched) {
       const changed = git('diff', '--name-only', fixtureCommit, 'main').split('\n').filter(Boolean)
       const churned = expect.untouched.paths.filter((p) => changed.includes(p))
@@ -641,7 +705,8 @@ export async function run(options: RunOptions) {
     )
     const models = verifyModels(setup, card.modelsByRole)
     const simCost = simLog.reduce((n, s) => n + (s.costUsd ?? 0), 0)
-    const allLanded = card.coordinators.length > 0 && card.coordinators.every((c) => c.landed)
+    const allLanded =
+      (card.coordinators.length > 0 || !!expect.branchOptional) && card.coordinators.every((c) => c.landed)
     if (cancelled) throw new Error('cancelled')
     const pass =
       !failure &&
@@ -690,6 +755,7 @@ export async function run(options: RunOptions) {
     log(`error: ${String(error)}`)
   } finally {
     instance?.close()
+    for (const peer of peers) peer.instance?.close()
     // Each step on its own: one failing must not keep the others from running.
     for (const child of groups) await stopGroup(child).catch((e) => log(`stopping ${child.pid}: ${e}`))
     process.off('SIGINT', onSignal)

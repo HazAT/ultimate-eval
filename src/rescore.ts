@@ -8,7 +8,7 @@ import { existsSync, readdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import type { Entry, Message, Summary } from './api.ts'
 import { agentProfiles, automationsOf, ROOT } from './run.ts'
-import { gateFailed, readExpect, score } from './score.ts'
+import { gateFailed, peerChecks, readExpect, score } from './score.ts'
 import type { Scorecard } from './score.ts'
 
 export async function rescore(dir: string) {
@@ -42,6 +42,12 @@ export async function rescore(dir: string) {
     readExpect(scenarioDir),
   )
   card.checks.push(...(before.checks ?? []).filter((c) => c.name === 'no unrelated files changed'))
+  const peers = join(dir, 'peers')
+  for (const name of existsSync(peers) ? readdirSync(peers).sort() : []) {
+    const peerBoard = JSON.parse(readFileSync(join(peers, name, 'transcripts', 'board.json'), 'utf8')) as { messages: Message[] }
+    const log = join(peers, name, 'home', 'supervisor.log')
+    card.checks.push(...peerChecks(name, peerBoard, existsSync(log) ? readFileSync(log, 'utf8') : ''))
+  }
   result.scorecard = card
   if (gateFailed(card)) result.pass = false
   writeFileSync(resultPath, JSON.stringify(result, null, 2))

@@ -59,6 +59,10 @@ export type Message = {
   /** The sender's answer entry this message carried down to a branch: an answer the user never sees. */
   routed?: number
   questions?: Question[]
+  /** A message to or from another project (`ultimate.tell`): its key, and the id it got on the other board. */
+  remote?: { project: string; machine: string; key: string; id?: number }
+  /** A progress note on a remote message, not its answer. */
+  interim?: boolean
 }
 
 type Op =
