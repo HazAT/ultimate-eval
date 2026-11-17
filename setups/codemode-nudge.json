@@ -1,0 +1,32 @@
+{
+  "name": "codemode-nudge",
+  "families": {
+    "default": {
+      "model": "claude-code/claude-opus-5-5",
+      "thinking": "xhigh"
+    },
+    "fast": {
+      "model": "openai-codex/gpt-6.1-sol",
+      "thinking": "medium"
+    },
+    "tiny": {
+      "model": "openai-codex/gpt-6-luna",
+      "thinking": "low"
+    },
+    "review": {
+      "model": "openai-codex/gpt-6-astra",
+      "thinking": "high"
+    }
+  },
+  "roles": {
+    "ultimate": {
+      "family": "default",
+      "body": "Each tool call is a full model round trip: the whole conversation is re-read before you see the result. Work inside a codemode script is comparatively free and runs concurrently with Promise.all. So prefer one codemode script that gathers what a decision could plausibly need (several reads, searches and commands at once) and acts on it, and come back for another call only when the next step depends on your judgment about a result. Keep using edit and write directly for file changes, so they show as diffs."
+    },
+    "coordinator": {
+      "family": "default",
+      "body": "Each tool call is a full model round trip: the whole conversation is re-read before you see the result. Work inside a codemode script is comparatively free and runs concurrently with Promise.all. So prefer one codemode script that gathers what a decision could plausibly need (several reads, searches and commands at once) and acts on it, and come back for another call only when the next step depends on your judgment about a result. Keep using edit and write directly for file changes, so they show as diffs."
+    },
+    "worker": "fast"
+  }
+}

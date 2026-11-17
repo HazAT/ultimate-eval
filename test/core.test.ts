@@ -181,6 +181,63 @@ test('score matches coordinators to features, counts workers, plans, landings an
   assert.equal(card.watchdog.failures, 1)
 })
 
+test('per role: turns, top-level and nested codemode calls by name, tokens; the report and overlays show them', async () => {
+  const { overlay } = await import('../src/setup.ts')
+  const { roleTable } = await import('../src/report.ts')
+  const call = (name: string) => ({ type: 'toolCall', id: name, name, arguments: {} })
+  const card = score(
+    {
+      ultimate: 2,
+      firstPromptAt: 0,
+      agents: { 12: 'worker' },
+      conversations: [
+        { id: 1, busy: false },
+        { id: 2, busy: false },
+        { id: 10, busy: false, title: 'Search' },
+        { id: 12, busy: false, parentConversationId: 10 },
+      ],
+      histories: {
+        1: [{ id: 3, kind: 'lineage.branched', conversationId: 1, data: { branch: 10, intent: 'Search' } }],
+        2: [assistant(20, 2, 'a/opus', 1, { content: [call('codemode'), call('message')] })],
+        10: [
+          assistant(21, 10, 'a/opus', 1, { content: [call('codemode')] }),
+          {
+            id: 22,
+            kind: 'pi.toolResult',
+            conversationId: 10,
+            model: [{ role: 'toolResult', toolName: 'codemode', content: [], details: { calls: [{ name: 'read' }, { name: 'read' }, { name: 'bash' }] } } as never],
+          },
+          assistant(23, 10, 'a/opus', 1, { content: [call('codemode')] }),
+        ],
+        12: [assistant(24, 12, 'b/sol', 1, { content: [call('edit'), call('bash')] })],
+      },
+      board: { messages: [] },
+    },
+    { search: /search/i },
+  )
+  const tokens = (n: number) => ({ input: 10 * n, output: 5 * n, cacheRead: 80 * n, cacheWrite: 10 * n })
+  assert.deepEqual(card.byRole, {
+    ultimate: { turns: 1, tools: { codemode: 1, message: 1 }, nested: {}, ...tokens(1) },
+    coordinator: { turns: 2, tools: { codemode: 2 }, nested: { read: 2, bash: 1 }, ...tokens(2) },
+    worker: { turns: 1, tools: { edit: 1, bash: 1 }, nested: {}, ...tokens(1) },
+  })
+  const run: RunResult = {
+    id: 'x',
+    pass: true,
+    status: 'done',
+    pins: { ultimateCommit: 'aaaaaaaaaaaa', setup: 'codemode-only', scenario: 'recipe-v2', scenarioSha: 'ffffff', simPromptSha: 'x' },
+    scorecard: { usage: { totalCostUsd: 1 }, coordinators: [], workers: { total: 1 }, byRole: card.byRole },
+  }
+  const coordinator = roleTable([run]).split('\n').find((l) => / coordinator /.test(l))!
+  assert.match(coordinator, /  2  .*20\/10\/160\/20  .*codemode 2  .*read 2, bash 1/)
+
+  assert.equal(overlay('worker', 'fast'), '---\nname: worker\nfamily: fast\naddTools: []\n---\n')
+  assert.equal(
+    overlay('coordinator', { family: 'default', codeMode: true, body: 'Batch calls. ' }),
+    '---\nname: coordinator\nfamily: default\ncodeMode: true\naddTools: []\n---\n\nBatch calls.\n',
+  )
+})
+
 test('tool errors: a killed dev server and a server not up yet are benign, the rest are listed', () => {
   const cases: [string, string, string][] = [
     ['bash', '<harness> [error] Command exited with code 143 </harness>', 'killed'],

@@ -35,6 +35,17 @@ export type Automation = {
   lastFireAt?: number
 }
 
+export type RoleStats = {
+  turns: number
+  tools: Record<string, number>
+  /** Calls made inside codemode scripts, from each codemode result's `details.calls`. */
+  nested: Record<string, number>
+  input: number
+  output: number
+  cacheRead: number
+  cacheWrite: number
+}
+
 type ModelUsage = {
   calls: number
   input: number
@@ -61,6 +72,8 @@ export type Scorecard = {
   timing: { firstLandingMin?: number; lastLandingMin?: number }
   usage: { byModel: Record<string, ModelUsage>; totalCostUsd: number; cacheHitRate: number }
   modelsByRole: Record<string, string[]>
+  /** Per role: model turns, top-level tool calls and nested codemode calls by name, and tokens. */
+  byRole: Record<string, RoleStats>
   questions: {
     asked: number
     withCards: number
@@ -340,6 +353,8 @@ export function score(data: Collected, featureWords: Record<string, RegExp>, exp
 
   const byModel: Record<string, ModelUsage> = {}
   const modelsByRole: Record<string, Set<string>> = {}
+  const byRole: Record<string, RoleStats> = {}
+  const bump = (counts: Record<string, number>, name: string) => (counts[name] = (counts[name] ?? 0) + 1)
   let failures = 0
   let retries = 0
   const benign: Scorecard['toolErrorDetail']['benign'] = {}
@@ -350,12 +365,18 @@ export function score(data: Collected, featureWords: Record<string, RegExp>, exp
     const summary = byId.get(Number(id))
     const role = summary ? roleOf(summary, data.ultimate, coordinatorIds, data.agents?.[Number(id)]) : 'unknown'
     const commandOf = new Map<string, string>()
+    const stats = () =>
+      (byRole[role] ??= { turns: 0, tools: {}, nested: {}, input: 0, output: 0, cacheRead: 0, cacheWrite: 0 })
     for (const entry of entries) {
       for (const call of toolCalls(entry) as { id?: string; arguments?: { command?: unknown } }[])
         if (call.id) commandOf.set(call.id, String(call.arguments?.command ?? ''))
       if (entry.kind === 'watchdog.failure') failures++
       if (entry.kind.startsWith('watchdog.') && /retry|continu/i.test(entry.kind + textOf(entry))) retries++
       const message = entry.model?.[0]
+      if (message?.role === 'toolResult' && (message as { toolName?: string }).toolName === 'codemode') {
+        const calls = (message as { details?: { calls?: { name?: string }[] } }).details?.calls
+        for (const call of Array.isArray(calls) ? calls : []) if (call.name) bump(stats().nested, call.name)
+      }
       if (message?.role === 'toolResult' && (message as { isError?: boolean }).isError) {
         const tool = (message as { toolName?: string }).toolName ?? '?'
         const text = resultText(message.content)
@@ -378,6 +399,13 @@ export function score(data: Collected, featureWords: Record<string, RegExp>, exp
       if (message?.role !== 'assistant' || !message.usage) continue
       const name = `${message.provider}/${message.model}`
       ;(modelsByRole[role] ??= new Set()).add(name)
+      const s = stats()
+      s.turns++
+      for (const call of toolCalls(entry)) if (call.name) bump(s.tools, call.name)
+      s.input += message.usage.input
+      s.output += message.usage.output
+      s.cacheRead += message.usage.cacheRead
+      s.cacheWrite += message.usage.cacheWrite
       const u = (byModel[name] ??= { calls: 0, input: 0, output: 0, cacheRead: 0, cacheWrite: 0, costUsd: 0 })
       u.calls++
       u.input += message.usage.input
@@ -556,6 +584,7 @@ export function score(data: Collected, featureWords: Record<string, RegExp>, exp
       cacheHitRate: prompt ? Math.round((sum('cacheRead') / prompt) * 1000) / 1000 : 0,
     },
     modelsByRole: Object.fromEntries(Object.entries(modelsByRole).map(([k, v]) => [k, [...v]])),
+    byRole,
     questions: {
       asked: toUser.length,
       withCards: toUser.filter((m) => m.questions?.length).length,

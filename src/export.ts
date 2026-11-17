@@ -33,7 +33,13 @@ export function publicResult(r: Json) {
       families: Object.fromEntries(
         Object.entries((p.families ?? {}) as Record<string, Json>).map(([f, v]) => [f, { model: str(v?.model), thinking: str(v?.thinking) }]),
       ),
-      roles: Object.fromEntries(Object.entries((p.roles ?? {}) as Record<string, unknown>).map(([role, f]) => [role, str(f)])),
+      // A role's `body` is free-form text: published only as its family and whether it set codeMode or a body.
+      roles: Object.fromEntries(
+        Object.entries((p.roles ?? {}) as Record<string, Json>).map(([role, f]) => [
+          role,
+          typeof f === 'string' ? f : { family: str(f?.family), codeMode: f?.codeMode === true || undefined, body: !!f?.body || undefined },
+        ]),
+      ),
       simModel: str(p.simModel),
       simEffort: str(p.simEffort),
       simPromptSha: str(p.simPromptSha),
@@ -94,6 +100,12 @@ export function publicResult(r: Json) {
         answered: num(card.questions.answered),
         waitSec: ((card.questions.waitSec ?? []) as unknown[]).flatMap((s) => num(s) ?? []),
       },
+      byRole: Object.fromEntries(
+        Object.entries((card.byRole ?? {}) as Record<string, Json>).map(([role, s]) => [
+          role,
+          { ...counts(s), tools: counts(s?.tools), nested: counts(s?.nested) },
+        ]),
+      ),
       watchdog: counts(card.watchdog),
       automations: card.automations && counts(card.automations),
       toolErrors: num(card.toolErrors),

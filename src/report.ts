@@ -1,6 +1,7 @@
 /** The matrix: runs grouped by setup (commit × model setup × scenario), with passes/N and median time and cost. */
 import { existsSync, readdirSync, readFileSync } from 'node:fs'
 import { join } from 'node:path'
+import type { RoleStats } from './score.ts'
 
 export type RunResult = {
   id: string
@@ -17,6 +18,7 @@ export type RunResult = {
     /** Real tool errors (before categories, every error). */
     toolErrors?: number
     checks?: { name: string; pass: boolean; gate: 'pass' | 'finding'; detail?: string }[]
+    byRole?: Record<string, RoleStats>
   }
   sim?: { costUsd: number }
 }
@@ -124,6 +126,48 @@ export function table(runs: RunResult[]) {
       g.failures.map((f) => f.status).join(', ') || '-',
     ])
   }
+  return [align(rows), roleTable(runs)].filter(Boolean).join('\n\n')
+}
+
+const align = (rows: string[][]) => {
   const widths = rows[0]!.map((_, i) => Math.max(...rows.map((r) => r[i]!.length)))
   return rows.map((r) => r.map((c, i) => c.padEnd(widths[i]!)).join('  ')).join('\n')
+}
+
+const ROLES = ['ultimate', 'coordinator', 'worker']
+const k = (n: number) => (n >= 1e6 ? `${(n / 1e6).toFixed(1)}M` : n >= 1e3 ? `${Math.round(n / 1e3)}k` : String(Math.round(n)))
+
+/** Mean calls per run by name, the most frequent first: `codemode 12, read 3.5`. */
+function perRun(list: Record<string, number>[], top = 4) {
+  const total: Record<string, number> = {}
+  for (const counts of list) for (const [name, n] of Object.entries(counts)) total[name] = (total[name] ?? 0) + n
+  const sorted = Object.entries(total).sort((a, b) => b[1] - a[1])
+  const shown = sorted.slice(0, top).map(([name, n]) => `${name} ${+(n / list.length).toFixed(1)}`)
+  return (sorted.length > top ? [...shown, `+${sorted.length - top}`] : shown).join(', ') || '-'
+}
+
+/**
+ * Per role, for the groups whose runs carry `byRole`: median turns and tokens, and mean top-level and nested codemode
+ * calls per run, the most frequent first.
+ */
+export function roleTable(runs: RunResult[]) {
+  const rows = [['commit  setup  scenario', 'role', 'N', 'turns', 'in/out/cache r/w tokens', 'tool calls per run', 'nested in codemode per run']]
+  for (const g of groups(runs)) {
+    const scored = g.runs.flatMap((r) => (r.scorecard?.byRole ? [r.scorecard.byRole] : []))
+    if (!scored.length) continue
+    for (const role of ROLES) {
+      const stats = scored.map((b) => b[role] ?? { turns: 0, tools: {}, nested: {}, input: 0, output: 0, cacheRead: 0, cacheWrite: 0 })
+      const med = (key: 'turns' | 'input' | 'output' | 'cacheRead' | 'cacheWrite') => median(stats.map((s) => s[key]))!
+      rows.push([
+        `${g.commit.slice(0, 10)}  ${g.setup}  ${g.scenario}@${g.scenarioSha.slice(0, 6)}`,
+        role,
+        String(scored.length),
+        String(med('turns')),
+        [k(med('input')), k(med('output')), k(med('cacheRead')), k(med('cacheWrite'))].join('/'),
+        perRun(stats.map((s) => s.tools)),
+        perRun(stats.map((s) => s.nested)),
+      ])
+    }
+  }
+  return rows.length > 1 ? align(rows) : ''
 }

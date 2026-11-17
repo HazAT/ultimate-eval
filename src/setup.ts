@@ -2,29 +2,47 @@
  * A model setup: the families a run's scratch user home gets, and which family each role runs on. Roles map to agent
  * definitions (`ultimate`, `coordinator`, `worker`, …); each gets a settings-only overlay (`addTools: []`) in the
  * scratch `~/.ultimate/agents/` that sets its family, so @ultimate and coordinators can run different models even
- * though both ship on `default`.
+ * though both ship on `default`. A role may instead be `{ family, codeMode?, body? }`: `codeMode: true` becomes a
+ * frontmatter line (Ultimate offers that agent only codemode), `body` the overlay's text, which Ultimate appends to the
+ * definition's instructions as "User additions".
  */
 import { mkdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 
 export type Family = { model: string; thinking?: string }
+export type Role = string | { family: string; codeMode?: boolean; body?: string }
 export type Setup = {
   name: string
   families: Record<string, Family>
-  roles: Record<string, string>
+  roles: Record<string, Role>
 }
+
+const familyOf = (role: Role) => (typeof role === 'string' ? role : role.family)
 
 export function readSetup(path: string): Setup {
   const setup = JSON.parse(readFileSync(path, 'utf8')) as Setup
   if (!setup.name || !setup.families?.default || !setup.roles)
     throw new Error(`${path}: a setup needs name, families.default and roles`)
-  for (const [role, family] of Object.entries(setup.roles))
-    if (!setup.families[family]) throw new Error(`${path}: role ${role} names unknown family ${family}`)
+  for (const [role, value] of Object.entries(setup.roles))
+    if (!setup.families[familyOf(value)])
+      throw new Error(`${path}: role ${role} names unknown family ${familyOf(value)}`)
   return setup
 }
 
 /** The model and thinking a role is expected to run on. */
-export const expected = (setup: Setup, role: string) => setup.families[setup.roles[role] ?? 'default']
+export const expected = (setup: Setup, role: string) =>
+  setup.families[setup.roles[role] ? familyOf(setup.roles[role]) : 'default']
+
+/** The scratch overlay that gives a role its family and the setup's extras. */
+export function overlay(name: string, role: Role) {
+  const extra: { codeMode?: boolean; body?: string } = typeof role === 'string' ? {} : role
+  return (
+    `---\nname: ${name}\nfamily: ${familyOf(role)}\n` +
+    (extra.codeMode ? 'codeMode: true\n' : '') +
+    `addTools: []\n---\n` +
+    (extra.body ? `\n${extra.body.trim()}\n` : '')
+  )
+}
 
 export type ModelCheck = {
   expected: string
@@ -65,9 +83,6 @@ export function seedUserHome(userHome: string, projects: string[], setup: Setup)
   json('settings.json', { onboarding: false, extensions: { disable: ['update'] } })
   json('trust.json', Object.fromEntries(projects.map((p) => [p, true])))
   json('model-families.json', { recent: { families: setup.families } })
-  for (const [role, family] of Object.entries(setup.roles))
-    writeFileSync(
-      join(dir, 'agents', `${role}.md`),
-      `---\nname: ${role}\nfamily: ${family}\naddTools: []\n---\n`,
-    )
+  for (const [name, role] of Object.entries(setup.roles))
+    writeFileSync(join(dir, 'agents', `${name}.md`), overlay(name, role))
 }
