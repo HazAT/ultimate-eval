@@ -168,10 +168,18 @@ export function logProblems(text: string) {
  * The other side of a tell, all findings: the peer project `name` received one message from another project, answered
  * it, asked its own user nothing (nobody is there), left its board clean, and its supervisor logged no problem.
  */
-export function peerChecks(name: string, board: { messages: Message[] }, supervisorLog: string): Check[] {
+export function peerChecks(
+  name: string,
+  board: { messages: Message[] },
+  supervisorLog: string,
+  stoppedAt?: number,
+): Check[] {
   const received = board.messages.filter((m) => m.from === 'remote' && m.re === undefined)
   const asked = board.messages.filter((m) => m.to === 'user' && m.reply)
-  const problems = logProblems(supervisorLog)
+  const all = logProblems(supervisorLog)
+  const problems = all.filter((line) => !harnessShutdown(line, stoppedAt))
+  const ignored = all.length - problems.length
+  const note = ignored ? ` (ignored ${ignored} harness-shutdown line${ignored === 1 ? '' : 's'})` : ''
   return [
     {
       name: `${name}: received one tell`,
@@ -196,9 +204,21 @@ export function peerChecks(name: string, board: { messages: Message[] }, supervi
       name: `${name}: supervisor log clean`,
       pass: !problems.length,
       gate: 'finding',
-      detail: problems.length ? problems.slice(0, 3).map((l) => l.slice(0, 200)).join('; ') : 'no warn or error lines',
+      detail:
+        (problems.length ? problems.slice(0, 3).map((l) => l.slice(0, 200)).join('; ') : 'no warn or error lines') + note,
     },
   ]
+}
+
+/**
+ * The warning a supervised core logs on an outside SIGTERM (Ultimate 4f2845d): the harness stopping the run's process
+ * group causes it, not the peer. Ignored when logged at or after the run's stop time, or on the text alone for runs
+ * that stored none.
+ */
+function harnessShutdown(line: string, stoppedAt?: number) {
+  const { at, text } = JSON.parse(line) as { at?: string; text?: string }
+  if (!text?.startsWith('Ignored SIGTERM sent to core pid')) return false
+  return stoppedAt === undefined || (at !== undefined && Date.parse(at) >= stoppedAt)
 }
 
 /**

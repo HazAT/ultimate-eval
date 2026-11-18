@@ -77,14 +77,21 @@ const signalGroup = (pgid: number, signal: NodeJS.Signals | 0) => {
 }
 
 /**
- * Stop a detached child's whole process group, by the real pid we spawned it with (never a pattern): TERM, then KILL
- * for any member still there after 15 s, whether or not the leader has exited.
+ * Stop a detached child's whole process group, by the real pid we spawned it with (never a pattern): TERM the leader
+ * alone first (a supervisor stops its core itself, and logs a warning when the core gets a TERM from outside), TERM
+ * what is left of the group once the leader has exited, then KILL any member still there after 15 s in all, whether
+ * or not the leader has exited.
  */
 export async function stopGroup(child: ChildProcess | undefined) {
   const pgid = child?.pid
   if (!pgid || pgid <= 1) return
+  if (!signalGroup(pgid, 0)) return
+  const exited = () => child.exitCode !== null || child.signalCode !== null
+  if (!exited()) child.kill('SIGTERM')
+  let i = 0
+  for (; i < 60 && !exited(); i++) await new Promise((d) => setTimeout(d, 250))
   if (!signalGroup(pgid, 'SIGTERM')) return
-  for (let i = 0; i < 60 && signalGroup(pgid, 0); i++) await new Promise((d) => setTimeout(d, 250))
+  for (; i < 60 && signalGroup(pgid, 0); i++) await new Promise((d) => setTimeout(d, 250))
   signalGroup(pgid, 'SIGKILL')
 }
 
@@ -631,6 +638,8 @@ export async function run(options: RunOptions) {
       peer.instance = undefined
       peerData.push({ name: peer.name, board: peerBoard, dir })
     }
+    const stoppedAt = Date.now()
+    result.stoppedAt = new Date(stoppedAt).toISOString()
     await stopGroup(server)
     for (const peer of peers) await stopGroup(peer.started.child)
     const keepHome = (from: string, to: string) => {
@@ -651,7 +660,9 @@ export async function run(options: RunOptions) {
     )
     for (const peer of peerData) {
       const supervisor = join(peer.dir, 'home', 'supervisor.log')
-      card.checks.push(...peerChecks(peer.name, peer.board, existsSync(supervisor) ? readFileSync(supervisor, 'utf8') : ''))
+      card.checks.push(
+        ...peerChecks(peer.name, peer.board, existsSync(supervisor) ? readFileSync(supervisor, 'utf8') : '', stoppedAt),
+      )
     }
     if (expect.untouched) {
       const changed = git('diff', '--name-only', fixtureCommit, 'main').split('\n').filter(Boolean)

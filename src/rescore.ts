@@ -47,7 +47,8 @@ export async function rescore(dir: string) {
   for (const name of existsSync(peers) ? readdirSync(peers).sort() : []) {
     const peerBoard = JSON.parse(readFileSync(join(peers, name, 'transcripts', 'board.json'), 'utf8')) as { messages: Message[] }
     const log = join(peers, name, 'home', 'supervisor.log')
-    card.checks.push(...peerChecks(name, peerBoard, existsSync(log) ? readFileSync(log, 'utf8') : ''))
+    const stoppedAt = result.stoppedAt ? Date.parse(result.stoppedAt) : undefined
+    card.checks.push(...peerChecks(name, peerBoard, existsSync(log) ? readFileSync(log, 'utf8') : '', stoppedAt))
   }
   result.scorecard = card
   const allLanded = (card.coordinators.length > 0 || !!expect.branchOptional) && everyLanded(card.coordinators)

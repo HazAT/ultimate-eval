@@ -496,6 +496,22 @@ test('tell: delivered, answered and heard gate the run; the peer side is finding
   assert.equal(messy['recipes-api: asked its user nothing'], false)
   assert.equal(messy['recipes-api: every reply-expected message answered'], false)
   assert.equal(messy['recipes-api: supervisor log clean'], false)
+  // The core's warning on the harness's own SIGTERM: ignored at or after the stop time, or on its text without one.
+  const sigterm = (at: string) =>
+    JSON.stringify({ at, level: 'warn', text: 'Ignored SIGTERM sent to core pid 42: the supervisor stops its core itself.' })
+  const late = sigterm('2026-11-18T09:51:00.000Z')
+  const logClean = (log: string, stoppedAt?: number) =>
+    peerChecks('p', { messages: [received] }, log, stoppedAt).find((c) => c.name === 'p: supervisor log clean')!
+  const stop = Date.parse('2026-11-18T09:50:59.000Z')
+  assert.deepEqual(logClean(late, stop), {
+    name: 'p: supervisor log clean',
+    pass: true,
+    gate: 'finding',
+    detail: 'no warn or error lines (ignored 1 harness-shutdown line)',
+  })
+  assert.equal(logClean(late).pass, true)
+  assert.equal(logClean(sigterm('2026-11-18T09:50:00.000Z'), stop).pass, false)
+  assert.equal(logClean(`${late}\n{"level":"warn","text":"other"}`, stop).pass, false)
 })
 
 test('each configured role is checked against what ran: ok, mismatch or not exercised', async () => {
