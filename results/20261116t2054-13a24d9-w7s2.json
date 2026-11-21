@@ -1,0 +1,189 @@
+{
+  "id": "20261116t2054-13a24d9-w7s2",
+  "pins": {
+    "ultimateCommit": "13a24d929e05754e322c1424b2646c9411a9326d",
+    "scenario": "recipe-reminder",
+    "scenarioSha": "b4e24a2c4b5d",
+    "setup": "today",
+    "setupSha": "a7fbce89e1e6",
+    "families": {
+      "default": {
+        "model": "claude-code/claude-opus-5-5",
+        "thinking": "xhigh"
+      },
+      "fast": {
+        "model": "openai-codex/gpt-6.1-sol",
+        "thinking": "medium"
+      },
+      "tiny": {
+        "model": "openai-codex/gpt-6-luna",
+        "thinking": "low"
+      },
+      "review": {
+        "model": "openai-codex/gpt-6-astra",
+        "thinking": "high"
+      }
+    },
+    "roles": {
+      "ultimate": "default",
+      "coordinator": "default",
+      "worker": "fast"
+    },
+    "simModel": "claude-code/claude-opus-5-5",
+    "simEffort": "low",
+    "simPromptSha": "8a0253cc7686",
+    "evalCommit": "19fa2eb6b6d011a352b3e33d37e3d9861310596e"
+  },
+  "pass": true,
+  "status": "done",
+  "minutes": 2.3,
+  "startupSec": 9,
+  "costUsd": 0.56,
+  "features": {
+    "search": true
+  },
+  "acceptance": [
+    {
+      "name": "page loads with all recipes",
+      "pass": true
+    },
+    {
+      "name": "search filters by name, ignoring case",
+      "pass": true
+    },
+    {
+      "name": "no console errors",
+      "pass": true
+    }
+  ],
+  "projectTests": {
+    "pass": true
+  },
+  "allLanded": true,
+  "noRemote": true,
+  "models": {
+    "ultimate": {
+      "expected": "claude-code/claude-opus-5-5",
+      "ran": [
+        "claude-code/claude-opus-5-5"
+      ],
+      "status": "ok"
+    },
+    "coordinator": {
+      "expected": "claude-code/claude-opus-5-5",
+      "ran": [
+        "claude-code/claude-opus-5-5"
+      ],
+      "status": "ok"
+    },
+    "worker": {
+      "expected": "openai-codex/gpt-6.1-sol",
+      "ran": [],
+      "status": "not exercised"
+    }
+  },
+  "answerShape": "list",
+  "sim": {
+    "calls": 4,
+    "costUsd": 0.07,
+    "improvised": 0,
+    "nudges": 0,
+    "refusedAnswers": 0
+  },
+  "scorecard": {
+    "coordinators": {
+      "started": 1,
+      "landed": 1
+    },
+    "workers": {
+      "total": 0
+    },
+    "plans": {
+      "coordinatorsWithPlan": 0,
+      "epics": 0,
+      "tasks": 0
+    },
+    "landings": {
+      "count": 1,
+      "pushed": 0
+    },
+    "timing": {
+      "firstLandingMin": 0.7,
+      "lastLandingMin": 0.7
+    },
+    "usage": {
+      "byModel": {
+        "claude-code/claude-opus-5-5": {
+          "calls": 17,
+          "input": 38,
+          "output": 4342,
+          "cacheRead": 378236,
+          "cacheWrite": 40574,
+          "costUsd": 0.4872312000000001
+        }
+      },
+      "totalCostUsd": 0.49,
+      "cacheHitRate": 0.903
+    },
+    "questions": {
+      "asked": 0,
+      "withCards": 0,
+      "multi": 0,
+      "multiAnswered": 0,
+      "answered": 0,
+      "waitSec": []
+    },
+    "byRole": {},
+    "watchdog": {
+      "failures": 0,
+      "retries": 0
+    },
+    "automations": {
+      "created": 1,
+      "fired": 1,
+      "fires": 1
+    },
+    "toolErrors": 2,
+    "toolErrorDetail": {
+      "real": {
+        "unknown": 1,
+        "bashExit": 1
+      },
+      "benign": {
+        "killed": 1
+      }
+    },
+    "checks": [
+      {
+        "name": "every coordinator works on a feature",
+        "pass": true,
+        "gate": "finding"
+      },
+      {
+        "name": "every reply-expected message answered",
+        "pass": true,
+        "gate": "finding"
+      },
+      {
+        "name": "no message sent twice",
+        "pass": true,
+        "gate": "finding"
+      },
+      {
+        "name": "an automation was created",
+        "pass": true,
+        "gate": "pass"
+      },
+      {
+        "name": "the automation fired",
+        "pass": true,
+        "gate": "pass"
+      },
+      {
+        "name": "the user heard from Ultimate after the fire",
+        "pass": true,
+        "gate": "pass"
+      }
+    ]
+  }
+}

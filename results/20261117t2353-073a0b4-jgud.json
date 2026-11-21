@@ -1,0 +1,235 @@
+{
+  "id": "20261117t2353-073a0b4-jgud",
+  "pins": {
+    "ultimateCommit": "073a0b4f5b39a3495d16c640415717a244547f8c",
+    "scenario": "recipe-v2",
+    "scenarioSha": "e96b9481051c",
+    "setup": "codemode-only",
+    "setupSha": "476ba65b9e45",
+    "families": {
+      "default": {
+        "model": "claude-code/claude-opus-5-5",
+        "thinking": "xhigh"
+      },
+      "fast": {
+        "model": "openai-codex/gpt-6.1-sol",
+        "thinking": "medium"
+      },
+      "tiny": {
+        "model": "openai-codex/gpt-6-luna",
+        "thinking": "low"
+      },
+      "review": {
+        "model": "openai-codex/gpt-6-astra",
+        "thinking": "high"
+      }
+    },
+    "roles": {
+      "ultimate": {
+        "family": "default",
+        "codeMode": true
+      },
+      "coordinator": {
+        "family": "default",
+        "codeMode": true
+      },
+      "worker": "fast"
+    },
+    "simModel": "claude-code/claude-opus-5-5",
+    "simEffort": "low",
+    "simPromptSha": "8a0253cc7686",
+    "evalCommit": "dc6ae295fdfcd67d31550203b3d145a79ad00146"
+  },
+  "pass": true,
+  "status": "done",
+  "minutes": 3,
+  "startupSec": 24,
+  "costUsd": 4.28,
+  "features": {
+    "search": true,
+    "detail": true,
+    "favourites": true
+  },
+  "acceptance": [
+    {
+      "name": "page loads with all recipes",
+      "pass": true
+    },
+    {
+      "name": "search filters by name, ignoring case",
+      "pass": true
+    },
+    {
+      "name": "clicking a recipe opens its page at its own address",
+      "pass": true
+    },
+    {
+      "name": "a recipe address survives reload and opens directly",
+      "pass": true
+    },
+    {
+      "name": "a recipe page links back to the list",
+      "pass": true
+    },
+    {
+      "name": "favourites toggle, count in a badge and survive reload",
+      "pass": true
+    },
+    {
+      "name": "no console errors",
+      "pass": true
+    }
+  ],
+  "projectTests": {
+    "pass": true
+  },
+  "allLanded": true,
+  "noRemote": true,
+  "models": {
+    "ultimate": {
+      "expected": "claude-code/claude-opus-5-5",
+      "ran": [
+        "claude-code/claude-opus-5-5"
+      ],
+      "status": "ok"
+    },
+    "coordinator": {
+      "expected": "claude-code/claude-opus-5-5",
+      "ran": [
+        "claude-code/claude-opus-5-5"
+      ],
+      "status": "ok"
+    },
+    "worker": {
+      "expected": "openai-codex/gpt-6.1-sol",
+      "ran": [],
+      "status": "not exercised"
+    }
+  },
+  "answerShape": "list",
+  "sim": {
+    "calls": 11,
+    "costUsd": 0.26,
+    "improvised": 0,
+    "nudges": 0,
+    "refusedAnswers": 0
+  },
+  "scorecard": {
+    "coordinators": {
+      "started": 3,
+      "landed": 3
+    },
+    "workers": {
+      "total": 0
+    },
+    "plans": {
+      "coordinatorsWithPlan": 0,
+      "epics": 0,
+      "tasks": 0
+    },
+    "landings": {
+      "count": 3,
+      "pushed": 0
+    },
+    "timing": {
+      "firstLandingMin": 1.2,
+      "lastLandingMin": 2.7
+    },
+    "usage": {
+      "byModel": {
+        "claude-code/claude-opus-5-5": {
+          "calls": 49,
+          "input": 120,
+          "output": 23915,
+          "cacheRead": 1810991,
+          "cacheWrite": 396878,
+          "costUsd": 4.0160022
+        }
+      },
+      "totalCostUsd": 4.02,
+      "cacheHitRate": 0.82
+    },
+    "questions": {
+      "asked": 1,
+      "withCards": 1,
+      "multi": 0,
+      "multiAnswered": 0,
+      "answered": 1,
+      "waitSec": [
+        5
+      ]
+    },
+    "byRole": {
+      "ultimate": {
+        "turns": 12,
+        "input": 34,
+        "output": 3726,
+        "cacheRead": 252729,
+        "cacheWrite": 28305,
+        "tools": {
+          "codemode": 6
+        },
+        "nested": {
+          "message": 4,
+          "bash": 2,
+          "branch": 3,
+          "note": 3,
+          "ultimate.action": 3
+        }
+      },
+      "coordinator": {
+        "turns": 37,
+        "input": 86,
+        "output": 20189,
+        "cacheRead": 1558262,
+        "cacheWrite": 368573,
+        "tools": {
+          "codemode": 32
+        },
+        "nested": {
+          "bash": 40,
+          "write": 19,
+          "edit": 5,
+          "browser": 13,
+          "workspace": 6,
+          "ultimate.conversations": 1,
+          "note": 3,
+          "notify": 2,
+          "read": 5,
+          "screenshot": 9
+        }
+      }
+    },
+    "watchdog": {
+      "failures": 0,
+      "retries": 0
+    },
+    "automations": {
+      "created": 0,
+      "fired": 0,
+      "fires": 0
+    },
+    "toolErrors": 0,
+    "toolErrorDetail": {
+      "real": {},
+      "benign": {}
+    },
+    "checks": [
+      {
+        "name": "every coordinator works on a feature",
+        "pass": true,
+        "gate": "finding"
+      },
+      {
+        "name": "every reply-expected message answered",
+        "pass": true,
+        "gate": "finding"
+      },
+      {
+        "name": "no message sent twice",
+        "pass": true,
+        "gate": "finding"
+      }
+    ]
+  }
+}

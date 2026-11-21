@@ -151,6 +151,7 @@
       "answered": 0,
       "waitSec": []
     },
+    "byRole": {},
     "watchdog": {
       "failures": 0,
       "retries": 0

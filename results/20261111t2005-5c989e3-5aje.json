@@ -150,6 +150,7 @@
         4
       ]
     },
+    "byRole": {},
     "watchdog": {
       "failures": 0,
       "retries": 0
