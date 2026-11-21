@@ -1,18 +1,20 @@
 /** @jsxImportSource @solidjs/web */
 // The overview: the run in progress, then the matrix (commit × setup × scenario), each row's runs a click away.
-import { For, Show, createMemo } from 'solid-js'
+import { For, Show, createMemo, createSignal } from 'solid-js'
 import { Button } from '@/components/ui/button.solid.tsx'
 import { cn } from '@/sdk/solid'
-import { LiveRuns } from './live.solid.tsx'
+import { CancelDialog, LiveRuns } from './live.solid.tsx'
 import { Box, Dot, Note, Section } from './parts.solid.tsx'
 import { mins, short, toneOf, toneText, usd, verdict } from './types.ts'
-import type { Group, Overview as Data, Summary } from './types.ts'
+import type { Group, Overview as Data, Running, Summary } from './types.ts'
 
 export function Overview(props: { data: Data; open: (id: string) => void; onCancelled: () => void }) {
   const byId = createMemo(() => new Map(props.data.runs.map((r) => [r.id, r])))
   const cancelled = () => props.data.runs.filter((r) => r.status === 'cancelled').length
+  const [cancelling, setCancelling] = createSignal<Running>()
   return (
     <div class="mx-auto max-w-5xl space-y-6 px-4 py-5 md:px-6">
+      <CancelDialog onCancelled={props.onCancelled} onClose={() => setCancelling()} run={cancelling()} />
       <Section title="now">
         <Show
           when={props.data.live.length > 0}
@@ -22,7 +24,7 @@ export function Overview(props: { data: Data; open: (id: string) => void; onCanc
             </Box>
           }
         >
-          <LiveRuns live={props.data.live} onCancelled={props.onCancelled} />
+          <LiveRuns live={props.data.live} onCancel={(run) => setCancelling(run)} />
         </Show>
       </Section>
 

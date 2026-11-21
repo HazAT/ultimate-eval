@@ -11,7 +11,7 @@ import type { InProgress, Legacy, Running, Said as SaidLine } from './types.ts'
 
 const PHASES = ['preparing', 'installing', 'starting', 'opening', 'running', 'collecting', 'accepting']
 
-export function LiveRuns(props: { live: InProgress[]; onCancelled: () => void }) {
+export function LiveRuns(props: { live: InProgress[]; onCancel: (run: Running) => void }) {
   return (
     <div class="space-y-3">
       <For each={props.live} keyed={(run) => run.id}>
@@ -20,7 +20,7 @@ export function LiveRuns(props: { live: InProgress[]; onCancelled: () => void })
             when={run().kind === 'running' ? (run() as Running) : undefined}
             fallback={<LegacyCard run={run() as Legacy} />}
           >
-            {(running) => <RunningCard onCancelled={props.onCancelled} run={running()} />}
+            {(running) => <RunningCard onCancel={props.onCancel} run={running()} />}
           </Show>
         )}
       </For>
@@ -41,7 +41,7 @@ function LegacyCard(props: { run: Legacy }) {
   )
 }
 
-function RunningCard(props: { run: Running; onCancelled: () => void }) {
+function RunningCard(props: { run: Running; onCancel: (run: Running) => void }) {
   const now = useNow(1000)
   const elapsed = () => (props.run.firstPromptAt ? now() - props.run.firstPromptAt : undefined)
   const share = () => Math.min(1, (elapsed() ?? 0) / (props.run.budgetMin * 60_000))
@@ -69,7 +69,16 @@ function RunningCard(props: { run: Running; onCancelled: () => void }) {
           </span>
         </Show>
         <span class="ml-auto flex items-center gap-1">
-          <CancelButton onCancelled={props.onCancelled} run={props.run} />
+          <Button
+            aria-label={`Cancel run ${props.run.id}…`}
+            class="h-6 font-mono text-[11px] text-muted-foreground hover:text-error"
+            onClick={() => props.onCancel(props.run)}
+            size="xs"
+            variant="ghost"
+          >
+            <Square class="size-2.5" />
+            cancel
+          </Button>
         </span>
       </div>
 
@@ -175,14 +184,21 @@ function RunningCard(props: { run: Running; onCancelled: () => void }) {
         {(url) => (
           <div class="flex flex-wrap items-center gap-x-2 gap-y-1 border-t border-border/70 px-3 py-2 font-mono text-[11px]">
             <Eye class="size-3 text-muted-foreground" />
-            <a
-              class="text-foreground/85 underline decoration-border underline-offset-2 hover:decoration-foreground"
-              href={url()}
-              rel="noreferrer"
-              target="_blank"
-            >
-              {url()}
-            </a>
+            <Show when={webUrl(url())} fallback={<span class="text-foreground/85">{url()}</span>}>
+              {(href) => (
+                <Button
+                  aria-label={`Watch run ${props.run.id}`}
+                  class="h-auto p-0 font-mono text-[11px] font-normal text-foreground/85 underline decoration-border underline-offset-2 hover:decoration-foreground"
+                  render={(link) => (
+                    <a {...link} href={href()} rel="noreferrer" target="_blank">
+                      {url()}
+                    </a>
+                  )}
+                  size={null}
+                  variant={null}
+                />
+              )}
+            </Show>
             <span class="rounded-sm bg-warning/15 px-1.5 py-px text-warning">watch only</span>
             <span class="text-muted-foreground/70">anything you click there acts as the user and disturbs the run</span>
           </div>
@@ -230,18 +246,28 @@ function Said(props: { said: SaidLine[] }) {
   )
 }
 
-/** Cancel behind a confirmation, which only a person may give: it ends a run Daniel paid for. */
-function CancelButton(props: { run: Running; onCancelled: () => void }) {
-  const [open, setOpen] = createSignal(false)
+/** The scratch instance's URL as a link only when it is http(s); anything else in live.json shows as text. */
+const webUrl = (url: string) => {
+  try {
+    return /^https?:$/.test(new URL(url).protocol) ? url : undefined
+  } catch {
+    return undefined
+  }
+}
+
+/**
+ * Cancel's confirmation, which only a person may give: it ends a run Daniel paid for. It holds the run it was opened
+ * for, outside the polled list, so a run that finishes meanwhile keeps the dialog and its error until dismissed.
+ */
+export function CancelDialog(props: { run: Running | undefined; onClose: () => void; onCancelled: () => void }) {
   const [busy, setBusy] = createSignal(false)
   const [error, setError] = createSignal<string>()
-  const remaining = () => props.run.repeat.total - props.run.repeat.index
-  const cancel = async () => {
+  const cancel = async (run: Running) => {
     setBusy(true)
     setError(undefined)
     try {
-      await api.action(CancelAction, { id: props.run.id })
-      setOpen(false)
+      await api.action(CancelAction, { id: run.id })
+      props.onClose()
       props.onCancelled()
     } catch (cause) {
       setError(errorMessage(cause))
@@ -249,22 +275,28 @@ function CancelButton(props: { run: Running; onCancelled: () => void }) {
       setBusy(false)
     }
   }
+  const close = () => {
+    setError(undefined)
+    props.onClose()
+  }
   return (
-    <>
-      <Button
-        aria-label={`Cancel run ${props.run.id}…`}
-        class="h-6 font-mono text-[11px] text-muted-foreground hover:text-error"
-        onClick={() => {
-          setError(undefined)
-          setOpen(true)
-        }}
-        size="xs"
-        variant="ghost"
-      >
-        <Square class="size-2.5" />
-        cancel
-      </Button>
-      <Dialog onOpenChange={(next) => !busy() && setOpen(next)} open={open()}>
+    <Dialog onOpenChange={(next) => !next && !busy() && close()} open={props.run !== undefined}>
+      <Show when={props.run}>
+        {(run) => <CancelContent busy={busy()} cancel={() => cancel(run())} close={close} error={error()} run={run()} />}
+      </Show>
+    </Dialog>
+  )
+}
+
+function CancelContent(props: {
+  run: Running
+  busy: boolean
+  error: string | undefined
+  cancel: () => Promise<void>
+  close: () => void
+}) {
+  const remaining = () => props.run.repeat.total - props.run.repeat.index
+  return (
         <DialogContent class="gap-3 sm:max-w-md">
           <DialogTitle class="text-[15px] font-medium">Cancel this run?</DialogTitle>
           <DialogDescription class="text-[13px] leading-relaxed">
@@ -273,16 +305,16 @@ function CancelButton(props: { run: Running; onCancelled: () => void }) {
             {remaining() > 0 && ` The ${plural(remaining(), 'remaining repeat')} won't start.`} The quota it spent so
             far is not recovered.
           </DialogDescription>
-          <Show when={error()}>
+          <Show when={props.error}>
             <p class="font-mono text-[11.5px] break-words text-error" role="alert">
-              {error()}
+              {props.error}
             </p>
           </Show>
           <div class="flex justify-end gap-2">
             <Button
               aria-label={`Keep run ${props.run.id} running`}
-              disabled={busy()}
-              onClick={() => setOpen(false)}
+              disabled={props.busy}
+              onClick={() => props.close()}
               size="sm"
               variant="ghost"
             >
@@ -291,16 +323,14 @@ function CancelButton(props: { run: Running; onCancelled: () => void }) {
             <Button
               aria-label={`Stop run ${props.run.id} now`}
               data-agent-confirm={`Stops eval run ${props.run.id} and the repeats after it; the quota spent is lost.`}
-              disabled={busy()}
-              onClick={() => cancel()}
+              disabled={props.busy}
+              onClick={() => props.cancel()}
               size="sm"
               variant="destructive"
             >
-              {busy() ? 'Cancelling…' : 'Cancel run'}
+              {props.busy ? 'Cancelling…' : 'Cancel run'}
             </Button>
           </div>
         </DialogContent>
-      </Dialog>
-    </>
   )
 }

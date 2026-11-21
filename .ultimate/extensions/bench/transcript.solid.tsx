@@ -37,18 +37,18 @@ export function Transcripts(props: { id: string; run: Run }) {
       })
       .toSorted((a, b) => rank(a.role) - rank(b.role) || a.id - b.id)
   })
-  const [chosen, setChosen] = useExtensionUiState<string | null>('conversation', null)
+  const [chosen, setChosen] = useExtensionUiState<number | null>('conversation', null)
   const shown = () => {
-    const ids = list().map((c) => String(c.id))
     const stored = chosen()
-    return stored !== null && ids.includes(stored) ? stored : ids[0]
+    const id = stored !== null && list().some((c) => c.id === stored) ? stored : list()[0]?.id
+    return id === undefined ? undefined : String(id)
   }
   return (
     <Show when={shown()} fallback={<Note>No transcripts were collected for this run.</Note>}>
       {(value) => (
         <Tabs
           aria-label={`Transcripts of run ${props.id}`}
-          bind={[value, setChosen]}
+          bind={[value, (id) => setChosen(Number(id))]}
           class="flex min-w-0 flex-col gap-4 @4xl:flex-row"
         >
           <TabsList
