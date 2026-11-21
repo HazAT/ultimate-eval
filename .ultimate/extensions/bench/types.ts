@@ -1,5 +1,5 @@
 // bench's browser types: the server actions as typed refs, the shapes they return, and small formatters.
-import { actionRef } from '@/sdk'
+import { actionRef } from '@/sdk/solid'
 
 export type Said = { at: number; who: 'you' | 'ultimate'; text: string }
 
@@ -93,7 +93,8 @@ export type Result = {
     setup: string
     setupSha?: string
     families?: Record<string, { model: string; thinking?: string }>
-    roles?: Record<string, string>
+    /** A family name, or since setups carry overlays `{ family, codeMode? }`. */
+    roles?: Record<string, string | { family: string; codeMode?: boolean }>
     simModel?: string
     simEffort?: string
     simPromptSha?: string
@@ -224,13 +225,15 @@ export const clock = (ms: number) => {
   const s = Math.max(0, Math.floor(ms / 1000))
   return `${Math.floor(s / 60)}:${String(s % 60).padStart(2, '0')}`
 }
-/** `Nov 11 20:16`, the day only when it is not today. */
+const timeOfDay = new Intl.DateTimeFormat([], { hour: '2-digit', minute: '2-digit', hourCycle: 'h23' })
+const day = new Intl.DateTimeFormat([], { month: 'short', day: 'numeric' })
+/** `Nov 11 20:16`, the day only when it is not today. Called per row, so it reuses two formatters. */
 export const when = (at: string | number | undefined) => {
   if (at === undefined) return '–'
   const d = new Date(at)
-  const time = d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', hourCycle: 'h23' })
+  const time = timeOfDay.format(d)
   if (d.toDateString() === new Date().toDateString()) return time
-  return `${d.toLocaleDateString([], { month: 'short', day: 'numeric' })} ${time}`
+  return `${day.format(d)} ${time}`
 }
 
 /** A finished run's tone: passed, failed, or stopped by us (not Ultimate's fault). */
