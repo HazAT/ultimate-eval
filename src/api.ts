@@ -167,6 +167,11 @@ export class Instance {
   private seen = new Map<string, string>()
   private stream?: string
   private subs = new Map<number, { conversation: number; docs: string[] }>()
+  /**
+   * Ultimate before 2026-11-21 takes one subscription per `POST /api/events/<stream>/<sub>`; newer ones take a batch at
+   * `POST /api/events/<stream>` and answer 404 at the old path (and old ones at the new). Learned on the first subscribe.
+   */
+  private perSubPath?: boolean
   private listeners = new Set<() => void>()
 
   constructor(base: string) {
@@ -260,12 +265,31 @@ export class Instance {
   async watch(conversation: number, docs: string[]) {
     const sub = this.subs.size + 1
     this.subs.set(sub, { conversation, docs })
-    if (this.stream) await this.subscribe(sub)
+    if (this.stream) await this.subscribe([sub])
   }
 
-  private async subscribe(sub: number) {
-    const { conversation, docs } = this.subs.get(sub)!
-    await this.post(`/api/events/${this.stream}/${sub}`, { conversation, docs, view: false })
+  private async subscribe(subs: number[]) {
+    if (!subs.length) return
+    const specs = subs.map((sub) => ({ sub, ...this.subs.get(sub)!, view: false }))
+    if (!this.perSubPath) {
+      const response = await fetch(`${this.base}/api/events/${this.stream}`, {
+        method: 'POST',
+        headers: this.headers(),
+        body: JSON.stringify({ subscribe: specs, unsubscribe: [] }),
+        signal: this.signal(),
+      })
+      const text = await response.text()
+      if (response.ok) {
+        this.perSubPath = false
+        const refused = Object.keys((JSON.parse(text) as { refused?: object }).refused ?? {})
+        if (refused.length) throw new Error(`subscriptions refused: ${text}`)
+        return
+      }
+      if (response.status !== 404 || this.perSubPath === false)
+        throw new Error(`POST /api/events: ${response.status} ${text}`)
+      this.perSubPath = true
+    }
+    for (const { sub, ...spec } of specs) await this.post(`/api/events/${this.stream}/${sub}`, spec)
   }
 
   /**
@@ -330,21 +354,32 @@ export class Instance {
         let key: string
         if (name === 'stream') {
           this.stream = payload.id
-          for (const id of this.subs.keys()) await this.subscribe(id)
+          await this.subscribe([...this.subs.keys()])
           this.downSince = undefined
           onReady()
           continue
         } else if (name === 'conversations') {
           this.conversations = payload
           key = name
+        } else if (name === 'conversationsOps') {
+          this.conversations = applyOps(this.conversations, payload) as Summary[]
+          key = 'conversations'
         } else if (name === 'tasks') {
           this.tasks = payload
           key = name
+        } else if (name === 'tasksOps') {
+          this.tasks = applyOps(this.tasks, payload) as Instance['tasks']
+          key = 'tasks'
         } else if ((name === 'doc' || name === 'docOps') && sub !== undefined) {
           key = `${this.subs.get(sub)?.conversation}:${payload.kind}`
           this.docs.set(key, name === 'doc' ? payload.value : applyOps(this.docs.get(key) ?? {}, payload.ops))
         } else continue
-        if (!this.changedValue(key, name === 'conversations' || name === 'tasks' ? payload : this.docs.get(key)))
+        if (
+          !this.changedValue(
+            key,
+            key === 'conversations' ? this.conversations : key === 'tasks' ? this.tasks : this.docs.get(key),
+          )
+        )
           continue
         this.lastProgress = Date.now()
         for (const listener of [...this.listeners]) listener()

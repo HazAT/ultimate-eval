@@ -1,6 +1,6 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { applyOps, heardAnswers, openQuestions } from '../src/api.ts'
+import { applyOps, heardAnswers, Instance, openQuestions } from '../src/api.ts'
 import type { Entry, Message } from '../src/api.ts'
 import { shapeAnswers, simDue } from '../src/sim.ts'
 import { commits, errorCategory, everyLanded, findings, gateFailed, peerChecks, score } from '../src/score.ts'
@@ -28,6 +28,57 @@ test('applyOps follows the stream: replace, set, append, splice, delete', () => 
   doc = applyOps(doc, [['d', ['messages', 0]]] as never)
   assert.deepEqual(doc, { messages: [], next: 2 })
 })
+
+for (const batched of [true, false])
+  test(`the stream speaks the ${batched ? 'batched (2026-11-21 on)' : 'per-sub (older)'} protocol`, async () => {
+    const { createServer } = await import('node:http')
+    const posts: string[] = []
+    let events!: import('node:http').ServerResponse
+    const send = (name: string, ...data: unknown[]) =>
+      events.write(`event: ${name}\n${data.map((d) => `data: ${JSON.stringify(d)}\n`).join('')}\n`)
+    const server = createServer((request, response) => {
+      if (request.method === 'GET') {
+        events = response
+        response.writeHead(200, { 'content-type': 'text/event-stream' })
+        send('stream', { id: 'abc' })
+        send('conversations', [{ id: 1, busy: false }])
+        send('tasks', { tasks: {} })
+        return
+      }
+      let body = ''
+      request.on('data', (chunk) => (body += chunk))
+      request.on('end', () => {
+        const ok = batched ? request.url === '/api/events/abc' : request.url === '/api/events/abc/1'
+        if (ok) posts.push(`${request.url} ${body}`)
+        response.writeHead(ok ? 200 : 404).end(ok ? '{"ok":true,"refused":{}}' : 'Unknown endpoint')
+        if (!ok) return
+        send('doc', 1, { kind: 'ultimate.board', value: { messages: [] } })
+        if (batched) {
+          send('conversationsOps', [['s', [0, 'busy'], true]])
+          send('tasksOps', [['s', ['tasks', 't1'], { state: { status: 'running' } }]])
+        }
+      })
+    })
+    await new Promise<void>((done) => server.listen(0, '127.0.0.1', done))
+    const instance = new Instance(`http://127.0.0.1:${(server.address() as { port: number }).port}`)
+    try {
+      await instance.watch(1, ['ultimate.board'])
+      await instance.open(5_000)
+      while (!instance.doc(1, 'ultimate.board') || (batched && !instance.busy())) await instance.changed(1_000)
+      assert.deepEqual(instance.doc(1, 'ultimate.board'), { messages: [] })
+      if (batched) {
+        assert.deepEqual(posts, [
+          '/api/events/abc {"subscribe":[{"sub":1,"conversation":1,"docs":["ultimate.board"],"view":false}],"unsubscribe":[]}',
+        ])
+        assert.equal(instance.conversations[0]!.busy, true)
+        assert.equal(instance.tasks.tasks?.t1?.state?.status, 'running')
+      } else assert.deepEqual(posts, ['/api/events/abc/1 {"conversation":1,"docs":["ultimate.board"],"view":false}'])
+    } finally {
+      instance.close()
+      server.closeAllConnections()
+      server.close()
+    }
+  })
 
 test('open questions are delivered, reply-expected messages to the user', () => {
   const m = (over: Partial<Message>): Message => ({ id: 1, from: 5, to: 'user', text: '', at: 0, reply: true, state: 'delivered', ...over })
