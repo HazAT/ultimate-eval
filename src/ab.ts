@@ -160,6 +160,7 @@ export async function runBatch(
           commit: planned.commit,
           setupPath: options.setupPath,
           scenario: planned.scenario,
+          ...(evalCommit ? { evalCommit } : {}),
         })
         record.runs.push(abRun(planned, result))
         save()

@@ -37,6 +37,8 @@ export type RunOptions = {
   keep?: boolean
   /** This run's place in a `--repeat`, for the live view. */
   repeat?: { index: number; total: number }
+  /** The harness commit a batch loaded at its start: a checkout that moves meanwhile must not split the batch. */
+  evalCommit?: string
   log?: (line: string) => void
 }
 
@@ -278,7 +280,7 @@ export async function run(options: RunOptions) {
     simModel: `claude-code/${SIM_MODEL}`,
     simEffort: SIM_EFFORT,
     simPromptSha: SIM_PROMPT_SHA,
-    evalCommit: (() => {
+    evalCommit: options.evalCommit ?? (() => {
       try {
         return sh('git', ['rev-parse', 'HEAD'], ROOT)
       } catch {

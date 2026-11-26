@@ -51,12 +51,16 @@ test('a batch stops before the next paid run on a failed preflight, a run that c
   const options = { repo: '/r', base: 'b', head: 'h', scenarios: ['s'], repeat: 2, setupPath: '/s.json', name: 'x' }
   const ok = async ({ commit }: { commit: string }) => ({ commit, ok: true, problems: [], seconds: 1 })
   const ran: string[] = []
-  const run = async ({ commit }: { commit: string }) => {
+  const pins: (string | undefined)[] = []
+  const run = async ({ commit, evalCommit }: { commit: string; evalCommit?: string }) => {
     ran.push(commit)
+    pins.push(evalCommit)
     return { id: `r${ran.length}`, status: 'error', pass: false, failure: { detail: 'Error: pnpm install failed\n  at …' } }
   }
   const errored = await runBatch(options, { run: run as never, preflight: ok, path: join(dir, 'a.json') })
   assert.deepEqual(ran, ['b'])
+  // Every run is pinned to the harness commit the batch started on, even if the checkout moves.
+  assert.deepEqual(pins, [errored.evalCommit])
   assert.equal(errored.complete, true)
   assert.equal(errored.error, 'base run r1 could not run: Error: pnpm install failed')
 
