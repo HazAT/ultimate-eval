@@ -178,6 +178,11 @@ export class Instance {
     this.base = base
   }
 
+  /** The subscription protocol the server took, once the first subscribe went through. */
+  get protocol() {
+    return this.perSubPath === undefined ? undefined : this.perSubPath ? 'per-sub' : 'batched'
+  }
+
   private headers() {
     return { 'content-type': 'application/json', origin: this.base }
   }

@@ -182,6 +182,78 @@ const claudeProjects = (tmp: string) => {
   return existsSync(dir) ? readdirSync(dir).filter((n) => n.startsWith(prefix)).map((n) => join(dir, n)) : []
 }
 
+/** Delete a run's temporary folder and Claude Code's session logs for its paths. */
+export function removeTemp(tmp: string) {
+  rmSync(tmp, { recursive: true, force: true })
+  for (const dir of claudeProjects(tmp)) rmSync(dir, { recursive: true, force: true })
+}
+
+/** The full sha of `commit` in `repo`. */
+export const resolveCommit = (repo: string, commit: string) => sh('git', ['rev-parse', `${commit}^{commit}`], repo)
+
+/**
+ * The Ultimate under test at `<tmp>/ultimate`, its packages installed: a shared clone writes nothing into the source
+ * repository. Returns the clone's path.
+ */
+export function cloneUltimate(repo: string, commit: string, tmp: string, log: (line: string) => void) {
+  const clone = join(tmp, 'ultimate')
+  sh('git', ['clone', '-q', '--shared', '--no-checkout', repo, clone], '/')
+  sh('git', ['checkout', '-q', '--detach', commit], clone)
+  sh('git', ['remote', 'remove', 'origin'], clone)
+  log('installing packages')
+  sh('pnpm', ['install', '--frozen-lockfile', '--prefer-offline'], clone, cleanEnv())
+  return clone
+}
+
+/** A fixture copied to `dir` as a git repository with one commit (`message`) and no remote; returns that commit. */
+export function initRepo(fixture: string, dir: string, message: string) {
+  cpSync(fixture, dir, { recursive: true, dereference: true })
+  sh('git', ['init', '-q', '-b', 'main'], dir)
+  sh('git', ['add', '-A'], dir)
+  sh('git', ['-c', 'user.name=Eval User', '-c', 'user.email=eval@example.com', 'commit', '-q', '-m', message], dir)
+  return sh('git', ['rev-parse', 'HEAD'], dir)
+}
+
+export type Started = { child: ChildProcess; base: string; exited: boolean }
+
+/**
+ * Start a supervised scratch Ultimate from `clone` on project `root`, with its own `home` and port and the scratch
+ * `userHome`; resolves once it serves. Its process group joins `groups`, so the caller stops it.
+ */
+export async function startInstance(options: {
+  clone: string
+  root: string
+  home: string
+  userHome: string
+  groups: Set<ChildProcess>
+  cancelled: () => boolean
+  log: (line: string) => void
+}) {
+  const { clone, root, home, userHome, groups, cancelled, log } = options
+  const name = root.split('/').at(-1)
+  mkdirSync(home, { recursive: true })
+  const base = `http://127.0.0.1:${await freePort()}`
+  log(`starting ${name} at ${base}`)
+  if (cancelled()) throw new Error('cancelled')
+  const child = spawn(process.execPath, ['bin/ultimate.ts', root, '--port', new URL(base).port, '--no-open'], {
+    cwd: clone,
+    detached: true,
+    stdio: ['ignore', 'ignore', 'ignore'],
+    env: { ...cleanEnv(), ULTIMATE_HOME: home, ULTIMATE_USER_HOME: userHome, ULTIMATE_NO_OPEN: '1' },
+  })
+  groups.add(child)
+  const state: Started = { child, base, exited: false }
+  child.on('exit', () => (state.exited = true))
+  for (let i = 0; ; i++) {
+    if (cancelled()) throw new Error('cancelled')
+    if (state.exited) throw new Error(`the scratch server of ${name} exited while starting`)
+    if (i > 480) throw new Error(`the scratch server of ${name} did not become ready in 2 minutes`)
+    if (await fetch(`${base}/api/models`).then((r) => r.ok, () => false)) break
+    await new Promise((d) => setTimeout(d, 250))
+  }
+  return state
+}
+
 export async function run(options: RunOptions) {
   const log = options.log ?? ((line: string) => console.log(line))
   const setup = readSetup(options.setupPath)
@@ -189,7 +261,7 @@ export async function run(options: RunOptions) {
   const scenarioText = readFileSync(join(scenarioDir, 'scenario.md'), 'utf8')
   const { accept, FEATURES, FEATURE_WORDS } = await import(join(scenarioDir, 'accept.ts'))
   const expect = readExpect(scenarioDir)
-  const commit = sh('git', ['rev-parse', `${options.commit}^{commit}`], options.repo)
+  const commit = resolveCommit(options.repo, options.commit)
   const id = `${new Date().toISOString().replace(/[-:]/g, '').slice(0, 13).toLowerCase()}-${commit.slice(0, 7)}-${Math.random().toString(36).slice(2, 6)}`
   const tmp = `/tmp/ue-run-${id}`
   const out = join(ROOT, 'runs', id)
@@ -288,14 +360,8 @@ export async function run(options: RunOptions) {
   process.on('exit', killOnExit)
 
   try {
-    // The Ultimate under test: a shared clone writes nothing into the source repository.
-    const clone = join(tmp, 'ultimate')
-    sh('git', ['clone', '-q', '--shared', '--no-checkout', options.repo, clone], '/')
-    sh('git', ['checkout', '-q', '--detach', commit], clone)
-    sh('git', ['remote', 'remove', 'origin'], clone)
     publish({ phase: 'installing' })
-    log('installing packages')
-    sh('pnpm', ['install', '--frozen-lockfile', '--prefer-offline'], clone, cleanEnv())
+    const clone = cloneUltimate(options.repo, commit, tmp, log)
     // The card at this commit sends a multi answer as a list (ce22290 and later) or joined with ", " (before).
     const joinMulti = !readFileSync(join(clone, 'extensions/questions/server.ts'), 'utf8').includes(
       'Array.isArray(a.answer)',
@@ -303,64 +369,32 @@ export async function run(options: RunOptions) {
 
     // The project: the fixture as a git repository with one commit and no remote.
     const project = join(tmp, 'project')
-    cpSync(join(scenarioDir, 'fixture'), project, { recursive: true, dereference: true })
+    const fixtureCommit = initRepo(join(scenarioDir, 'fixture'), project, 'Recipe list')
     const git = (...args: string[]) => sh('git', args, project)
-    git('init', '-q', '-b', 'main')
-    git('add', '-A')
-    git('-c', 'user.name=Eval User', '-c', 'user.email=eval@example.com', 'commit', '-q', '-m', 'Recipe list')
-    const fixtureCommit = git('rev-parse', 'HEAD')
 
     // The other projects: each fixture its own repository, named by its folder as Ultimate names a project.
     const peersDir = join(scenarioDir, 'peers')
     const peerNames = existsSync(peersDir) ? readdirSync(peersDir).sort() : []
-    for (const name of peerNames) {
-      const root = join(tmp, 'peers', name)
-      cpSync(join(peersDir, name), root, { recursive: true, dereference: true })
-      sh('git', ['init', '-q', '-b', 'main'], root)
-      sh('git', ['add', '-A'], root)
-      sh('git', ['-c', 'user.name=Eval User', '-c', 'user.email=eval@example.com', 'commit', '-q', '-m', name], root)
-    }
+    for (const name of peerNames) initRepo(join(peersDir, name), join(tmp, 'peers', name), name)
 
     const userHome = join(tmp, 'user')
     const homeOf = (name: string) => join(userHome, '.ultimate', 'projects', name)
     const home = homeOf('project')
     seedUserHome(userHome, [project, ...peerNames.map((name) => join(tmp, 'peers', name))], setup)
 
-    /** Start a supervised scratch Ultimate on `root` with its own home and port; resolves once it serves. */
-    const startInstance = async (root: string, name: string) => {
-      mkdirSync(homeOf(name), { recursive: true })
-      const base = `http://127.0.0.1:${await freePort()}`
-      log(`starting ${name} at ${base}`)
-      if (cancelled) throw new Error('cancelled')
-      const child = spawn(process.execPath, ['bin/ultimate.ts', root, '--port', new URL(base).port, '--no-open'], {
-        cwd: clone,
-        detached: true,
-        stdio: ['ignore', 'ignore', 'ignore'],
-        env: { ...cleanEnv(), ULTIMATE_HOME: homeOf(name), ULTIMATE_USER_HOME: userHome, ULTIMATE_NO_OPEN: '1' },
-      })
-      groups.add(child)
-      const state = { child, base, exited: false }
-      child.on('exit', () => (state.exited = true))
-      for (let i = 0; ; i++) {
-        if (cancelled) throw new Error('cancelled')
-        if (state.exited) throw new Error(`the scratch server of ${name} exited while starting`)
-        if (i > 480) throw new Error(`the scratch server of ${name} did not become ready in 2 minutes`)
-        if (await fetch(`${base}/api/models`).then((r) => r.ok, () => false)) break
-        await new Promise((d) => setTimeout(d, 250))
-      }
-      return state
-    }
+    const launch = (root: string, name: string) =>
+      startInstance({ clone, root, home: homeOf(name), userHome, groups, cancelled: () => cancelled, log })
 
     publish({ phase: 'starting' })
     // The peers first, so the project's first prompt already lists them.
     for (const name of peerNames) {
-      const started = await startInstance(join(tmp, 'peers', name), name)
+      const started = await launch(join(tmp, 'peers', name), name)
       const peer = new Instance(started.base)
       peers.push({ name, started, instance: peer })
       await peer.watch(1, ['board'])
       await peer.open()
     }
-    const started = await startInstance(project, 'project')
+    const started = await launch(project, 'project')
     server = started.child
     const base = started.base
     const exited = () => started.exited || peers.some((p) => p.started.exited)
@@ -782,10 +816,7 @@ export async function run(options: RunOptions) {
     } catch (e) {
       log(`writing results: ${e}`)
     }
-    if (!options.keep) {
-      rmSync(tmp, { recursive: true, force: true })
-      for (const dir of claudeProjects(tmp)) rmSync(dir, { recursive: true, force: true })
-    }
+    if (!options.keep) removeTemp(tmp)
     log(`run ${id}: ${result.pass ? 'PASS' : `FAIL (${result.status})`} → ${out}`)
   }
   return result
