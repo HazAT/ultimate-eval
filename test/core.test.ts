@@ -632,6 +632,22 @@ test('report groups by commit, setup and scenario with passes/N and medians', ()
   assert.equal(b!.commit, 'bbbbbbbbbbbb')
 })
 
+test('report keeps runs of different harness versions (eval commit, sim prompt) in separate rows', () => {
+  const r = (minutes: number, evalCommit?: string, simPromptSha = 'p1'): RunResult => ({
+    id: String(Math.random()),
+    pass: true,
+    status: 'done',
+    minutes,
+    pins: { ultimateCommit: 'aaaaaaaaaaaa', setup: 'today', scenario: 'recipe-v2', scenarioSha: 'ffffff', simPromptSha, evalCommit },
+  })
+  const list = groups([r(10, 'e1'), r(20, 'e1'), r(40, 'e2'), r(50, 'e1', 'p2'), r(60)])
+  assert.deepEqual(
+    list.map((g) => [g.evalCommit, g.simPromptSha, g.runs.length, g.medianMin]),
+    [['e1', 'p1', 2, 15], ['e2', 'p1', 1, 40], ['e1', 'p2', 1, 50], [undefined, 'p1', 1, 60]],
+  )
+  assert.match(table([r(10, 'e1234567890')]), /recipe-v2@ffffff  e123456 /)
+})
+
 test('live.json is replaced whole, keeps the last turns, and knows which coordinators landed', () => {
   const root = [
     { id: 1, kind: 'lineage.branched', data: { branch: 7, intent: 'Search' } },
@@ -736,7 +752,7 @@ test('export publishes only allowlisted fields of finished runs, and the scan re
   assert.deepEqual(out.scorecard.coordinators, { started: 2, landed: 1 })
   assert.deepEqual(out.scorecard.questions.waitSec, [30])
   assert.deepEqual(out.acceptance, [{ name: 'opens a recipe', pass: true }])
-  assert.match(table(readPublished(results)), /c0ffee  today  recipe-v2@aa  0\/1/)
+  assert.match(table(readPublished(results)), /c0ffee  today  recipe-v2@aa  -  0\/1/)
 
   // The scan catches what an allowlisted field could still carry, and a refused export writes nothing.
   assert.deepEqual(scan('a@b.co'), ['@', 'email'])

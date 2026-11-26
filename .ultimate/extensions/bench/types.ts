@@ -56,6 +56,7 @@ export type Group = {
   setup: string
   scenario: string
   scenarioSha: string
+  evalCommit?: string
   passes: number
   n: number
   medianMin?: number

@@ -1,5 +1,5 @@
 /** @jsxImportSource @solidjs/web */
-// The overview: the run in progress, then the matrix (commit × setup × scenario), each row's runs a click away.
+// The overview: the run in progress, then the matrix (commit × setup × scenario × eval harness), each row's runs a click away.
 import { For, Show, createMemo, createSignal } from 'solid-js'
 import { Button } from '@/components/ui/button.solid.tsx'
 import { cn } from '@/sdk/solid'
@@ -71,6 +71,10 @@ function Row(props: { group: Group; byId: Map<string, Summary>; open: (id: strin
             {' '}
             · {g().setup} · {g().scenario}
             <span class="text-muted-foreground/60">@{g().scenarioSha.slice(0, 6)}</span>
+            <span class="text-muted-foreground/60" title="The eval harness commit these runs were made with">
+              {' '}
+              · eval {short(g().evalCommit) || '-'}
+            </span>
           </span>
         </span>
         <span class="ml-auto shrink-0 text-muted-foreground">
