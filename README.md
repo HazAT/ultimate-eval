@@ -15,13 +15,25 @@ pnpm eval run --commit <sha|main> [--setup setups/today.json] [--scenario recipe
 pnpm eval report [--from results]   # passes/N, median minutes and cost per commit × setup × scenario
 pnpm eval export      # results/<id>.json: the cleaned-up, published result of each finished run
 pnpm eval rescore [id…]   # rebuild finished runs' scorecards from what they stored (new checks reach old runs)
+pnpm eval preflight --commit <sha> [--setup FILE] [--scenario NAME]   # can this commit run this setup? no model calls
+pnpm eval ab --base <sha> --head <sha> --scenario NAME [--scenario …] [--repeat N] [--setup FILE] [--name LABEL]
+pnpm eval ab --status <label>   # where a batch stands
 pnpm check && pnpm test
 ```
 
 `--repo` defaults to `~/Projects/ultimate`, which is only read: the run clones it with `git clone --shared`.
 Runs go one after another; each spends real subscription quota (estimate: $3–15 list), so schedule them at night.
-A script looping over several calls (an A/B) sets `EVAL_PLAN=i/N` on each, so Bench's `status` and the status line
-show the overall position (`run 2/4`) rather than the repeat within one call.
+`preflight` clones and installs the commit, starts a scratch instance with the setup, and checks that the event stream
+connects, that every agent definition and overlay loads, that each role runs on its setup's model with a login, and
+that the supervisor logged no warning; then stops it. About 10 s, free.
+
+`ab` is an A/B batch: preflight on both commits, then base and head alternating, one run at a time, `--repeat` pairs
+per scenario, `EVAL_PLAN=i/N` across the batch (Bench's status shows `run 2/4`). It starts itself as the user unit
+`ue-ab-<label>` so a host restart does not kill it (`--foreground` runs it in place), logging to
+`runs/ab-<label>.log`. `runs/ab-<label>.json` records it: preflight results, then each run (`id, arm, commit,
+scenario, pass, status, minutes, cost`), and `complete: true` once nothing more will run (`error` says why it stopped
+early). Watch `systemctl --user is-active ue-ab-<label>`, then read the record; never grep the log. The
+`run-ultimate-ab` skill is the runbook for @ultimate.
 
 ## What one run does (`src/run.ts`)
 
