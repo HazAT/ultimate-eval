@@ -1,5 +1,5 @@
 /**
- * pnpm eval run --commit <sha> [--setup setups/today.json] [--scenario recipe-v2] [--repeat N] [--repo PATH] [--keep]
+ * pnpm eval run --commit <sha> [--setup setups/today.json] [--scenario recipe-v2] [--repeat N] [--repo PATH] [--keep] [--export]
  * pnpm eval report [--from results]   the matrix from runs/, or from the published results/
  * pnpm eval export   write results/<id>.json, the cleaned-up public result of every finished run
  * pnpm eval rescore [run id…]   rebuild scorecards of finished runs from what they stored
@@ -33,6 +33,8 @@ const { values, positionals } = parseArgs({
     repeat: { type: 'string', default: '1' },
     repo: { type: 'string', default: join(homedir(), 'Projects/ultimate') },
     keep: { type: 'boolean', default: false },
+    // Only a run meant for publishing writes to the tracked results/; smoke and verification runs stay in runs/.
+    export: { type: 'boolean', default: false },
     from: { type: 'string', default: 'runs' },
   },
   allowPositionals: true,
@@ -57,7 +59,7 @@ if (command === 'run') {
     if (result.status === 'cancelled') break
   }
   console.log(`\n${table(readRuns(join(ROOT, 'runs')))}`)
-  console.log(`\nexported ${exportResults(join(ROOT, 'runs'), join(ROOT, 'results'))} results to results/`)
+  if (values.export) console.log(`\nexported ${exportResults(join(ROOT, 'runs'), join(ROOT, 'results'))} results to results/`)
 } else if (command === 'ab' && values.status) {
   console.log(formatStatus(batchStatus(values.status)))
 } else if (command === 'ab') {
@@ -109,7 +111,7 @@ if (command === 'run') {
   }
 } else {
   console.error(
-    'Usage: pnpm eval run --commit <sha> [--setup FILE] [--scenario NAME] [--repeat N] [--keep] | pnpm eval ab --base <sha> --head <sha> --scenario NAME… [--repeat N] [--setup FILE] [--name LABEL] [--foreground] | pnpm eval ab --status <name> | pnpm eval preflight --commit <sha> [--setup FILE] [--scenario NAME] | pnpm eval report [--from results] | pnpm eval export | pnpm eval rescore [id…]',
+    'Usage: pnpm eval run --commit <sha> [--setup FILE] [--scenario NAME] [--repeat N] [--keep] [--export] | pnpm eval ab --base <sha> --head <sha> --scenario NAME… [--repeat N] [--setup FILE] [--name LABEL] [--foreground] | pnpm eval ab --status <name> | pnpm eval preflight --commit <sha> [--setup FILE] [--scenario NAME] | pnpm eval report [--from results] | pnpm eval export | pnpm eval rescore [id…]',
   )
   process.exit(1)
 }

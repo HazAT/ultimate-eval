@@ -8,7 +8,7 @@ export type RunResult = {
   pass: boolean
   status: string
   minutes?: number
-  pins: { ultimateCommit: string; setup: string; scenario: string; scenarioSha: string; simPromptSha: string }
+  pins: { ultimateCommit: string; setup: string; scenario: string; scenarioSha: string; simPromptSha: string; evalCommit?: string }
   features?: Record<string, boolean>
   scorecard?: {
     usage: { totalCostUsd: number }
@@ -45,12 +45,17 @@ export function readPublished(dir: string): RunResult[] {
     .map((name) => JSON.parse(readFileSync(join(dir, name), 'utf8')) as RunResult)
 }
 
-/** One row of the matrix: the runs of one commit × setup × scenario. */
+/**
+ * One row of the matrix: the runs of one commit × setup × scenario, made by one harness (eval commit and simulated
+ * user's prompt), so its medians never mix harness versions.
+ */
 export type Group = {
   commit: string
   setup: string
   scenario: string
   scenarioSha: string
+  evalCommit?: string
+  simPromptSha: string
   runs: RunResult[]
   passes: number
   medianMin?: number
@@ -65,16 +70,17 @@ export type Group = {
   failures: { id: string; status: string }[]
 }
 
-/** The runs grouped by commit × setup × scenario, in the order first seen. */
+/** The runs grouped by commit × setup × scenario × harness, in the order first seen. */
 export function groups(runs: RunResult[]): Group[] {
   const byKey = new Map<string, RunResult[]>()
   // A run we stopped ourselves (Ctrl+C) says nothing about Ultimate: it stays in runs/ but out of the matrix.
   for (const r of runs.filter((r) => r.status !== 'cancelled')) {
-    const key = `${r.pins.ultimateCommit}\0${r.pins.setup}\0${r.pins.scenario}\0${r.pins.scenarioSha}`
+    const { ultimateCommit, setup, scenario, scenarioSha, evalCommit, simPromptSha } = r.pins
+    const key = [ultimateCommit, setup, scenario, scenarioSha, evalCommit, simPromptSha].join('\0')
     byKey.set(key, [...(byKey.get(key) ?? []), r])
   }
   return [...byKey.values()].map((list) => {
-    const { ultimateCommit, setup, scenario, scenarioSha } = list[0]!.pins
+    const { ultimateCommit, setup, scenario, scenarioSha, evalCommit, simPromptSha } = list[0]!.pins
     const features: Record<string, number> = {}
     for (const r of list) for (const [f, ok] of Object.entries(r.features ?? {})) if (ok) features[f] = (features[f] ?? 0) + 1
     return {
@@ -82,6 +88,8 @@ export function groups(runs: RunResult[]): Group[] {
       setup,
       scenario,
       scenarioSha,
+      evalCommit,
+      simPromptSha,
       runs: list,
       passes: list.filter((r) => r.pass).length,
       medianMin: median(list.flatMap((r) => (r.minutes === undefined ? [] : [r.minutes]))),
@@ -98,10 +106,12 @@ export function groups(runs: RunResult[]): Group[] {
   })
 }
 
+const label = (g: Group) => `${g.commit.slice(0, 10)}  ${g.setup}  ${g.scenario}@${g.scenarioSha.slice(0, 6)}  ${g.evalCommit?.slice(0, 7) ?? '-'}`
+
 export function table(runs: RunResult[]) {
   const rows = [
     [
-      'commit  setup  scenario',
+      'commit  setup  scenario  eval',
       'pass/N',
       'median min',
       'median $',
@@ -115,7 +125,7 @@ export function table(runs: RunResult[]) {
   for (const g of groups(runs)) {
     const n = g.runs.length
     rows.push([
-      `${g.commit.slice(0, 10)}  ${g.setup}  ${g.scenario}@${g.scenarioSha.slice(0, 6)}`,
+      label(g),
       `${g.passes}/${n}`,
       g.medianMin === undefined ? '-' : g.medianMin.toFixed(1),
       (g.medianCost ?? 0).toFixed(2),
@@ -151,7 +161,7 @@ function perRun(list: Record<string, number>[], top = 4) {
  * calls per run, the most frequent first.
  */
 export function roleTable(runs: RunResult[]) {
-  const rows = [['commit  setup  scenario', 'role', 'N', 'turns', 'in/out/cache r/w tokens', 'tool calls per run', 'nested in codemode per run']]
+  const rows = [['commit  setup  scenario  eval', 'role', 'N', 'turns', 'in/out/cache r/w tokens', 'tool calls per run', 'nested in codemode per run']]
   for (const g of groups(runs)) {
     const scored = g.runs.flatMap((r) => (r.scorecard?.byRole ? [r.scorecard.byRole] : []))
     if (!scored.length) continue
@@ -159,7 +169,7 @@ export function roleTable(runs: RunResult[]) {
       const stats = scored.map((b) => b[role] ?? { turns: 0, tools: {}, nested: {}, input: 0, output: 0, cacheRead: 0, cacheWrite: 0 })
       const med = (key: 'turns' | 'input' | 'output' | 'cacheRead' | 'cacheWrite') => median(stats.map((s) => s[key]))!
       rows.push([
-        `${g.commit.slice(0, 10)}  ${g.setup}  ${g.scenario}@${g.scenarioSha.slice(0, 6)}`,
+        label(g),
         role,
         String(scored.length),
         String(med('turns')),

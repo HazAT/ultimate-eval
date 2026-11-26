@@ -11,9 +11,9 @@ this project's #119.
 
 ```bash
 pnpm install
-pnpm eval run --commit <sha|main> [--setup setups/today.json] [--scenario recipe-v2] [--repeat N] [--keep]
-pnpm eval report [--from results]   # passes/N, median minutes and cost per commit × setup × scenario
-pnpm eval export      # results/<id>.json: the cleaned-up, published result of each finished run
+pnpm eval run --commit <sha|main> [--setup setups/today.json] [--scenario recipe-v2] [--repeat N] [--keep] [--export]
+pnpm eval report [--from results]   # passes/N, median minutes and cost per commit × setup × scenario × eval commit
+pnpm eval export      # results/<id>.json: the cleaned-up, published result of each finished run (only when asked)
 pnpm eval rescore [id…]   # rebuild finished runs' scorecards from what they stored (new checks reach old runs)
 pnpm eval preflight --commit <sha> [--setup FILE] [--scenario NAME]   # can this commit run this setup? no model calls
 pnpm eval ab --base <sha> --head <sha> --scenario NAME [--scenario …] [--repeat N] [--setup FILE] [--name LABEL]
@@ -22,7 +22,11 @@ pnpm check && pnpm test
 ```
 
 `--repo` defaults to `~/Projects/ultimate`, which is only read: the run clones it with `git clone --shared`.
-Runs go one after another; each spends real subscription quota (estimate: $3–15 list), so schedule them at night.
+Runs go one after another; each spends real subscription quota, about $2–3 a run, or about $0.5 for a reminder or
+tell run. A/Bs that Ultimate's @ultimate requests run at once, not scheduled for later (Daniel, card 91).
+A matrix row holds the runs of one Ultimate commit × setup × scenario made by one harness (eval commit and simulated
+user's prompt sha), so its medians never mix harness versions.
+
 `preflight` clones and installs the commit, starts a scratch instance with the setup, and checks that the event stream
 connects, that every agent definition and overlay loads, that each role runs on its setup's model with a login, and
 that the supervisor logged no warning; then stops it. About 10 s, free.
@@ -102,8 +106,9 @@ Not verified: the thinking level that ran (no API exposes it); `models` checks t
 
 ## Published results (`results/<id>.json`, tracked)
 
-`pnpm eval export` (also run at the end of every `pnpm eval run`) writes one cleaned-up file per finished run;
-cancelled and still-running runs are skipped. Each field is copied by name (`src/export.ts`, an allowlist):
+Nothing reaches `results/` on its own: `pnpm eval export`, or `pnpm eval run --export` at the end of its runs, writes
+one cleaned-up file per finished run in `runs/`; cancelled and still-running runs are skipped. A plain `pnpm eval run`
+(a smoke or verification run) stays in the gitignored `runs/`, so it never lands in the tracked folder by accident. Each field is copied by name (`src/export.ts`, an allowlist):
 
 - pins: Ultimate and eval commits, scenario and setup with their shas, families, roles, sim model, effort and prompt sha;
 - `pass`, `status`, `minutes`, `startupSec`, total `costUsd`, and on failure its `reason`, `atMin` and where it
