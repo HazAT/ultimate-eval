@@ -54,8 +54,9 @@ const fileName = (value: unknown, pattern: RegExp, what: string) => {
 const arg = (args: unknown, key: string) => (args && typeof args === 'object' ? (args as Record<string, unknown>)[key] : undefined)
 
 /**
- * Is `pid` this project's eval runner, still alive? `pnpm eval run` execs `node src/cli.ts run …` in the project root:
- * the executable is node, its script is this project's src/cli.ts, the subcommand right after it is `run`. Guards cancel
+ * Is `pid` this project's eval runner, still alive? `pnpm eval run` execs `node src/cli.ts run …` in the project root,
+ * an A/B batch `node src/cli.ts ab …` (its runs carry the batch's pid): the executable is node, its script is this
+ * project's src/cli.ts, the subcommand right after it is `run` or `ab`. Guards cancel
  * against a reused pid and against any other process that merely mentions those words.
  */
 const isRunner = (pid: unknown, ctx: Ctx) => {
@@ -69,7 +70,7 @@ const isRunner = (pid: unknown, ctx: Ctx) => {
       basename(exe) === 'node' &&
       script > 0 &&
       resolve(cwd, argv[script]!) === join(ctx.host.projectRoot, 'src/cli.ts') &&
-      argv[script + 1] === 'run'
+      (argv[script + 1] === 'run' || argv[script + 1] === 'ab')
     )
   } catch {
     return false

@@ -30,6 +30,7 @@ const { values, positionals } = parseArgs({
     name: { type: 'string' },
     status: { type: 'string' },
     foreground: { type: 'boolean', default: false },
+    unit: { type: 'string' },
     repeat: { type: 'string', default: '1' },
     repo: { type: 'string', default: join(homedir(), 'Projects/ultimate') },
     keep: { type: 'boolean', default: false },
@@ -46,10 +47,21 @@ if (command !== 'ab' && scenarios.length > 1) throw new Error('only ab takes mor
 if (command === 'run') {
   const repeat = Number(values.repeat)
   if (!Number.isInteger(repeat) || repeat < 1) throw new Error('--repeat must be a positive integer')
+  // Nothing is spent on a commit and setup that cannot run.
+  const checked = await preflight({
+    repo: resolve(values.repo),
+    commit: values.commit,
+    setupPath: resolve(ROOT, values.setup),
+    scenario: scenarios[0]!,
+  })
+  if (!checked.ok) {
+    console.error('preflight failed: no run started')
+    process.exit(1)
+  }
   for (let i = 0; i < repeat; i++) {
     const result = await run({
       repo: resolve(values.repo),
-      commit: values.commit,
+      commit: checked.commit,
       setupPath: resolve(ROOT, values.setup),
       scenario: scenarios[0]!,
       keep: values.keep,
@@ -76,8 +88,10 @@ if (command === 'run') {
     setupPath: resolve(ROOT, values.setup),
     ...(values.name ? { name: values.name } : {}),
   })
-  if (values.foreground) await runBatch(batch)
-  else {
+  if (values.foreground) {
+    const record = await runBatch({ ...batch, ...(values.unit ? { unit: values.unit } : {}) })
+    process.exitCode = record.error ? 1 : 0
+  } else {
     const { unit, record, log } = launchUnit(batch)
     console.log(`started ${unit}\nwatch: systemctl --user is-active ${unit}  (then read ${record})\nprogress: pnpm eval ab --status ${batch.name}\nlog: ${log}`)
   }

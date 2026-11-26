@@ -34,20 +34,39 @@ export async function preflight(options: {
   const log = options.log ?? ((line: string) => console.log(line))
   const startedAt = Date.now()
   const commit = resolveCommit(options.repo, options.commit)
-  const setup = readSetup(options.setupPath)
   const tmp = `/tmp/ue-preflight-${commit.slice(0, 7)}-${Math.random().toString(36).slice(2, 6)}`
   const problems: string[] = []
   const groups = new Set<ChildProcess>()
   let instance: Instance | undefined
-  log(`preflight ${commit.slice(0, 10)}, setup ${setup.name}, scenario ${options.scenario}`)
+  // Ctrl+C or a TERM stops the check and still tears down: the scratch supervisor is detached, so leaving without the
+  // finally block would orphan it. A second signal kills the groups at once.
+  let cancelled = false
+  const killGroups = () => {
+    for (const child of groups) if (child.pid && child.pid > 1) try { process.kill(-child.pid, 'SIGKILL') } catch {}
+  }
+  const onSignal = (signal: NodeJS.Signals) => {
+    if (cancelled) {
+      killGroups()
+      process.exit(130)
+    }
+    cancelled = true
+    log(`${signal}: stopping the preflight`)
+    instance?.close()
+  }
+  process.on('SIGINT', onSignal)
+  process.on('SIGTERM', onSignal)
+  process.on('exit', killGroups)
   try {
+    const setup = readSetup(options.setupPath)
+    log(`preflight ${commit.slice(0, 10)}, setup ${setup.name}, scenario ${options.scenario}`)
     const clone = cloneUltimate(options.repo, commit, tmp, log)
     const project = join(tmp, 'project')
     initRepo(join(ROOT, 'scenarios', options.scenario, 'fixture'), project, 'Recipe list')
     const userHome = join(tmp, 'user')
     const home = join(userHome, '.ultimate', 'projects', 'project')
     seedUserHome(userHome, [project], setup)
-    const started = await startInstance({ clone, root: project, home, userHome, groups, cancelled: () => false, log })
+    if (cancelled) throw new Error('cancelled')
+    const started = await startInstance({ clone, root: project, home, userHome, groups, cancelled: () => cancelled, log })
 
     instance = new Instance(started.base)
     await instance.watch(1, ['board'])
@@ -79,12 +98,16 @@ export async function preflight(options: {
     for (const line of logProblems(existsSync(supervisor) ? readFileSync(supervisor, 'utf8') : ''))
       problems.push(`supervisor: ${line.slice(0, 300)}`)
     if (started.exited) problems.push('the scratch supervisor exited')
+    if (cancelled) throw new Error('cancelled')
   } catch (error) {
-    problems.push(String(error instanceof Error ? error.message : error))
+    problems.push(cancelled ? 'cancelled' : String(error instanceof Error ? error.message : error))
   } finally {
     instance?.close()
     for (const child of groups) await stopGroup(child).catch(() => {})
     removeTemp(tmp)
+    process.off('SIGINT', onSignal)
+    process.off('SIGTERM', onSignal)
+    process.off('exit', killGroups)
   }
   const result = {
     commit,

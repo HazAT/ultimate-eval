@@ -42,13 +42,17 @@ export type AbRecord = {
   repeat: number
   setup: string
   evalCommit?: string
+  /** The user unit it runs in; absent for `--foreground`. */
+  unit?: string
+  /** The batch's process, for a foreground batch's liveness. */
+  pid: number
   startedAt: string
   finishedAt?: string
   /** How many runs the batch plans. */
   total: number
   preflight: Preflight[]
   runs: AbRun[]
-  /** Why the batch stopped early: a failed preflight, a cancel, an error. */
+  /** Why the batch stopped early: a failed preflight, a run the harness could not run, a cancel, an error. */
   error?: string
   /** True once nothing more will run, whether every run happened or not. */
   complete: boolean
@@ -100,9 +104,16 @@ export function resolveBatch(options: AbOptions) {
   return { ...options, base, head, name }
 }
 
-/** Run the batch in this process: preflight both commits, then every planned run, recording as it goes. */
-export async function runBatch(options: AbOptions & { name: string }) {
-  const path = recordPath(options.name)
+/**
+ * Run the batch in this process: preflight both commits, then every planned run, recording as it goes. A run the
+ * harness could not run (`error`) or a cancel stops the batch: the next run would spend for nothing. A run that hung
+ * or timed out is a result, and the batch goes on. Resolves to the record; `error` set means it stopped early.
+ */
+export async function runBatch(
+  options: AbOptions & { name: string; unit?: string },
+  deps = { run, preflight, path: recordPath(options.name) },
+) {
+  const { path } = deps
   const plan = planBatch(options.base, options.head, options.scenarios, options.repeat)
   let evalCommit: string | undefined
   try {
@@ -116,51 +127,59 @@ export async function runBatch(options: AbOptions & { name: string }) {
     repeat: options.repeat,
     setup: relative(ROOT, options.setupPath),
     ...(evalCommit ? { evalCommit } : {}),
+    ...(options.unit ? { unit: options.unit } : {}),
+    pid: process.pid,
     startedAt: new Date().toISOString(),
     total: plan.length,
     preflight: [],
     runs: [],
     complete: false,
   }
+  // The name is this batch's alone: claimed exclusively, so no second batch (unit or foreground) overwrites it.
+  mkdirSync(dirname(path), { recursive: true })
+  writeFileSync(path, JSON.stringify(record, null, 2) + '\n', { flag: 'wx' })
   const save = () => writeRecord(path, record)
-  const finish = (error?: string) => {
-    if (error) record.error = error
-    record.finishedAt = new Date().toISOString()
-    record.complete = true
-    save()
-    console.log(`ab ${options.name}: ${error ? `stopped: ${error}` : 'complete'} → ${relative(ROOT, path)}`)
-  }
-  save()
 
-  // Each commit once, on the first scenario: what it checks (stream, agents, models, logins) is the setup's, not the
-  // scenario's.
-  for (const commit of [options.base, options.head]) {
-    const result = await preflight({ repo: options.repo, commit, setupPath: options.setupPath, scenario: options.scenarios[0]! })
-    record.preflight.push(result)
-    save()
-  }
-  const failed = record.preflight.filter((p) => !p.ok)
-  if (failed.length)
-    return finish(`preflight failed: ${failed.map((p) => `${p.commit.slice(0, 7)}: ${p.problems.join('; ')}`).join(' | ')}`)
-
-  try {
-    for (const [i, planned] of plan.entries()) {
-      process.env.EVAL_PLAN = `${i + 1}/${plan.length}`
-      console.log(`ab ${options.name}: run ${i + 1}/${plan.length}, ${planned.arm} ${planned.commit.slice(0, 7)} on ${planned.scenario}`)
-      const result = await run({
-        repo: options.repo,
-        commit: planned.commit,
-        setupPath: options.setupPath,
-        scenario: planned.scenario,
-      })
-      record.runs.push(abRun(planned, result))
-      save()
-      if (result.status === 'cancelled') return finish('cancelled')
+  const stop = await (async () => {
+    try {
+      // Each commit once, on the first scenario: what it checks (stream, agents, models, logins) is the setup's.
+      for (const commit of [options.base, options.head]) {
+        record.preflight.push(
+          await deps.preflight({ repo: options.repo, commit, setupPath: options.setupPath, scenario: options.scenarios[0]! }),
+        )
+        save()
+      }
+      const failed = record.preflight.filter((p) => !p.ok)
+      if (failed.length)
+        return `preflight failed: ${failed.map((p) => `${p.commit.slice(0, 7)}: ${p.problems.join('; ')}`).join(' | ')}`
+      for (const [i, planned] of plan.entries()) {
+        process.env.EVAL_PLAN = `${i + 1}/${plan.length}`
+        console.log(`ab ${options.name}: run ${i + 1}/${plan.length}, ${planned.arm} ${planned.commit.slice(0, 7)} on ${planned.scenario}`)
+        const result = await deps.run({
+          repo: options.repo,
+          commit: planned.commit,
+          setupPath: options.setupPath,
+          scenario: planned.scenario,
+        })
+        record.runs.push(abRun(planned, result))
+        save()
+        if (result.status === 'cancelled') return 'cancelled'
+        if (result.status === 'error') {
+          const detail = String((result.failure as { detail?: string } | undefined)?.detail ?? '').split('\n')[0]
+          return `${planned.arm} run ${result.id} could not run: ${detail}`
+        }
+      }
+      return undefined
+    } catch (error) {
+      return String(error instanceof Error ? error.message : error)
     }
-  } catch (error) {
-    return finish(String(error instanceof Error ? error.message : error))
-  }
-  finish()
+  })()
+  if (stop) record.error = stop
+  record.finishedAt = new Date().toISOString()
+  record.complete = true
+  save()
+  console.log(`ab ${options.name}: ${stop ? `stopped: ${stop}` : 'complete'} → ${relative(ROOT, path)}`)
+  return record
 }
 
 /** Start the batch as the user unit `ue-ab-<name>`, running this CLI in the foreground inside it. */
@@ -168,7 +187,7 @@ export function launchUnit(options: AbOptions & { name: string }) {
   const unit = unitOf(options.name)
   if (existsSync(recordPath(options.name))) throw new Error(`${relative(ROOT, recordPath(options.name))} exists: pick another --name`)
   const args = [
-    'src/cli.ts', 'ab', '--foreground', '--name', options.name, '--repo', options.repo,
+    'src/cli.ts', 'ab', '--foreground', '--unit', unit, '--name', options.name, '--repo', options.repo,
     '--base', options.base, '--head', options.head, '--repeat', String(options.repeat),
     '--setup', options.setupPath, ...options.scenarios.flatMap((s) => ['--scenario', s]),
   ]
@@ -181,6 +200,15 @@ export function launchUnit(options: AbOptions & { name: string }) {
     process.execPath, ...args,
   ], { stdio: 'inherit' })
   return { unit, record: relative(ROOT, recordPath(options.name)), log: relative(ROOT, log) }
+}
+
+const pidAlive = (pid: number) => {
+  try {
+    process.kill(pid, 0)
+    return true
+  } catch {
+    return false
+  }
 }
 
 /** Where batch `name` stands: its record and whether its unit still runs. */
@@ -203,7 +231,7 @@ export function formatStatus({ unit, active, record }: ReturnType<typeof batchSt
     return `${runs.filter((r) => r.pass).length}/${runs.length}`
   }
   const lines = [
-    `${record.name}: ${record.complete ? 'complete' : 'running'} (unit ${unit} ${active}), ${record.runs.length}/${record.total} runs`,
+    `${record.name}: ${record.complete ? 'complete' : 'running'} (${record.unit ? `unit ${unit} ${active}` : `foreground pid ${record.pid}`}), ${record.runs.length}/${record.total} runs`,
     `base ${record.base.slice(0, 7)} ${passes('base')} pass · head ${record.head.slice(0, 7)} ${passes('head')} pass`,
     ...record.preflight.map((p) => `preflight ${p.commit.slice(0, 7)}: ${p.ok ? 'ok' : `FAILED ${p.problems.join('; ')}`}`),
     ...record.runs.map(
@@ -211,7 +239,8 @@ export function formatStatus({ unit, active, record }: ReturnType<typeof batchSt
     ),
     ...(record.error ? [`stopped: ${record.error}`] : []),
   ]
-  if (!record.complete && active !== 'active' && active !== 'activating')
-    lines.push('the unit is gone but the record is not complete: the batch died (see the log)')
+  // A unit batch dies with its unit; a foreground batch with its process.
+  const alive = record.unit ? active === 'active' || active === 'activating' : pidAlive(record.pid)
+  if (!record.complete && !alive) lines.push('the record is not complete and its batch is gone: it died (see the log)')
   return lines.join('\n')
 }
