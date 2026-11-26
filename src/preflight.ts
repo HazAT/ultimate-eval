@@ -109,6 +109,8 @@ export async function preflight(options: {
     process.off('SIGTERM', onSignal)
     process.off('exit', killGroups)
   }
+  // A signal during teardown came after the last check: it still cancels, so no paid run follows.
+  if (cancelled && !problems.includes('cancelled')) problems.push('cancelled')
   const result = {
     commit,
     ok: !problems.length,

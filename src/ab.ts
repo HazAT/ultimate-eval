@@ -7,7 +7,7 @@
  * read the record; never a log line.
  */
 import { execFileSync } from 'node:child_process'
-import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs'
+import { existsSync, linkSync, mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs'
 import { dirname, join, relative } from 'node:path'
 import { preflight } from './preflight.ts'
 import type { Preflight } from './preflight.ts'
@@ -82,6 +82,14 @@ export function abRun(planned: Planned, result: Record<string, unknown>): AbRun 
   }
 }
 
+/** An error's message without its stack frames; a failed command's stderr lines stay. */
+export const errorText = (detail: string | undefined) =>
+  (detail ?? '')
+    .split('\n')
+    .filter((line) => !/^\s+at /.test(line))
+    .join('\n')
+    .trim()
+
 /** A batch name usable as a unit and a file name. */
 export const batchName = (name: string) => name.replace(/[^a-zA-Z0-9-]+/g, '-').replace(/^-+|-+$/g, '')
 export const recordPath = (name: string) => join(ROOT, 'runs', `ab-${name}.json`)
@@ -136,18 +144,30 @@ export async function runBatch(
     complete: false,
   }
   // The name is this batch's alone: claimed exclusively, so no second batch (unit or foreground) overwrites it.
+  // Written whole first, then linked into place: a reader never sees it empty, and a taken name fails with EEXIST.
   mkdirSync(dirname(path), { recursive: true })
-  writeFileSync(path, JSON.stringify(record, null, 2) + '\n', { flag: 'wx' })
+  const claim = `${path}.${process.pid}.claim`
+  writeFileSync(claim, JSON.stringify(record, null, 2) + '\n')
+  try {
+    linkSync(claim, path)
+  } finally {
+    rmSync(claim, { force: true })
+  }
   const save = () => writeRecord(path, record)
 
   const stop = await (async () => {
     try {
       // Each commit once, on the first scenario: what it checks (stream, agents, models, logins) is the setup's.
       for (const commit of [options.base, options.head]) {
-        record.preflight.push(
-          await deps.preflight({ repo: options.repo, commit, setupPath: options.setupPath, scenario: options.scenarios[0]! }),
-        )
+        const checked = await deps.preflight({
+          repo: options.repo,
+          commit,
+          setupPath: options.setupPath,
+          scenario: options.scenarios[0]!,
+        })
+        record.preflight.push(checked)
         save()
+        if (checked.problems.includes('cancelled')) return 'cancelled'
       }
       const failed = record.preflight.filter((p) => !p.ok)
       if (failed.length)
@@ -166,8 +186,7 @@ export async function runBatch(
         save()
         if (result.status === 'cancelled') return 'cancelled'
         if (result.status === 'error') {
-          const detail = String((result.failure as { detail?: string } | undefined)?.detail ?? '').split('\n')[0]
-          return `${planned.arm} run ${result.id} could not run: ${detail}`
+          return `${planned.arm} run ${result.id} could not run: ${errorText((result.failure as { detail?: string })?.detail)}`
         }
       }
       return undefined

@@ -55,20 +55,28 @@ test('a batch stops before the next paid run on a failed preflight, a run that c
   const run = async ({ commit, evalCommit }: { commit: string; evalCommit?: string }) => {
     ran.push(commit)
     pins.push(evalCommit)
-    return { id: `r${ran.length}`, status: 'error', pass: false, failure: { detail: 'Error: pnpm install failed\n  at …' } }
+    return { id: `r${ran.length}`, status: 'error', pass: false, failure: { detail: 'Error: Command failed: git rev-parse x\nfatal: Needed a single revision\n    at checkExecSyncError (node:child_process:1)' } }
   }
   const errored = await runBatch(options, { run: run as never, preflight: ok, path: join(dir, 'a.json') })
   assert.deepEqual(ran, ['b'])
   // Every run is pinned to the harness commit the batch started on, even if the checkout moves.
   assert.deepEqual(pins, [errored.evalCommit])
   assert.equal(errored.complete, true)
-  assert.equal(errored.error, 'base run r1 could not run: Error: pnpm install failed')
+  assert.equal(errored.error, 'base run r1 could not run: Error: Command failed: git rev-parse x\nfatal: Needed a single revision')
+  assert.deepEqual(readdirSync(dir).sort(), ['a.json']) // the claim file is gone
 
   const refused = async ({ commit }: { commit: string }) =>
     ({ commit, ok: commit === 'b', problems: commit === 'b' ? [] : ['agent ultimate: Unknown field: codeMode'], seconds: 1 })
   const blocked = await runBatch(options, { run: run as never, preflight: refused, path: join(dir, 'b.json') })
   assert.deepEqual(ran, ['b']) // nothing more spent
   assert.equal(blocked.error, 'preflight failed: h: agent ultimate: Unknown field: codeMode')
+
+  // A Ctrl+C during the first preflight ends the batch there.
+  let checks = 0
+  const interrupted = async ({ commit }: { commit: string }) => (checks++, { commit, ok: false, problems: ['cancelled'], seconds: 1 })
+  const stopped = await runBatch(options, { run: run as never, preflight: interrupted, path: join(dir, 'd.json') })
+  assert.equal(checks, 1)
+  assert.equal(stopped.error, 'cancelled')
 
   const throws = async () => { throw new Error('/s.json: a setup needs name') }
   const bad = await runBatch(options, { run: run as never, preflight: throws, path: join(dir, 'c.json') })
