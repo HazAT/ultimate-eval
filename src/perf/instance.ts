@@ -86,7 +86,7 @@ export async function perfInstance(commit: string, options: {
     const seedPath = join(dirname(home), 'seed.json')
     const copy = (from: string, to: string) => execFileSync('cp', ['-a', from, to], { cwd: tmp })
     return {
-      base, home, userHome, fake,
+      base, home, userHome, fake, halt,
       async restart() {
         await halt()
         await start()

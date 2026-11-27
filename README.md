@@ -39,6 +39,26 @@ scenario, pass, status, minutes, cost`), and `complete: true` once nothing more 
 early). Watch `systemctl --user is-active ue-ab-<label>`, then read the record; never grep the log. The
 `run-ultimate-ab` skill is the runbook for @ultimate.
 
+## Performance (`eval perf`)
+
+```bash
+pnpm eval perf --commit <sha|main> [--commit …] [--repeat N] [--name LABEL] [--small] [--foreground]
+pnpm eval perf --status <name>
+pnpm eval perf --report [name…]
+pnpm eval perf --export <name>
+```
+
+This black-box benchmark seeds 300 sidebar rows and two 300-turn transcripts using a fake model, then uses headless
+Chromium to measure load, switching, prompt-to-response, streaming, memory, reconnect and typing. It runs three
+repeats by default, one pass per commit each round, restoring each commit's seed before its pass. `--small` uses 50
+sidebar rows and 100 turns per transcript. The default workload took about 70 s to seed and 70 s per pass on main,
+excluding package install and the load gate. Before each pass the gate checks the 1-minute machine load every 15 s
+while it's above 4. After 30 min it runs anyway and marks the sample `timeout`.
+
+By default the user unit `ue-perf-<name>` runs the batch, with its log and live record in `runs/`. Reports keep
+harness versions and seed sizes separate. Only an explicit export writes to `results/perf/`; results are pushed
+only with Daniel's approval.
+
 ## What one run does (`src/run.ts`)
 
 1. Clones the commit under test into `/tmp/ue-run-<id>/ultimate` (no `origin`), `pnpm install --prefer-offline`.

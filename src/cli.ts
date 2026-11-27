@@ -20,7 +20,10 @@ import { rescore } from './rescore.ts'
 import { ROOT, run } from './run.ts'
 import { findings } from './score.ts'
 
+// `perf` has its own flags; in particular, --commit repeats and --export takes a name.
+const perf = process.argv[2] === 'perf'
 const { values, positionals } = parseArgs({
+  args: perf ? ['perf'] : process.argv.slice(2),
   options: {
     commit: { type: 'string', default: 'main' },
     setup: { type: 'string', default: 'setups/today.json' },
@@ -44,7 +47,10 @@ const { values, positionals } = parseArgs({
 const command = positionals[0]
 const scenarios = values.scenario?.length ? values.scenario : ['recipe-v2']
 if (command !== 'ab' && scenarios.length > 1) throw new Error('only ab takes more than one --scenario')
-if (command === 'run') {
+if (perf) {
+  const { perfCli } = await import('./perf/cli.ts')
+  await perfCli(process.argv.slice(3))
+} else if (command === 'run') {
   const repeat = Number(values.repeat)
   if (!Number.isInteger(repeat) || repeat < 1) throw new Error('--repeat must be a positive integer')
   // Nothing is spent on a commit and setup that cannot run.
@@ -125,7 +131,7 @@ if (command === 'run') {
   }
 } else {
   console.error(
-    'Usage: pnpm eval run --commit <sha> [--setup FILE] [--scenario NAME] [--repeat N] [--keep] [--export] | pnpm eval ab --base <sha> --head <sha> --scenario NAME… [--repeat N] [--setup FILE] [--name LABEL] [--foreground] | pnpm eval ab --status <name> | pnpm eval preflight --commit <sha> [--setup FILE] [--scenario NAME] | pnpm eval report [--from results] | pnpm eval export | pnpm eval rescore [id…]',
+    'Usage: pnpm eval run --commit <sha> [--setup FILE] [--scenario NAME] [--repeat N] [--keep] [--export] | pnpm eval ab --base <sha> --head <sha> --scenario NAME… [--repeat N] [--setup FILE] [--name LABEL] [--foreground] | pnpm eval ab --status <name> | pnpm eval preflight --commit <sha> [--setup FILE] [--scenario NAME] | pnpm eval report [--from results] | pnpm eval export | pnpm eval rescore [id…] | pnpm eval perf --commit <sha> [--commit …] [--repeat N] [--name LABEL] [--small] [--foreground] | pnpm eval perf --status <name> | pnpm eval perf --report [name…] | pnpm eval perf --export <name>',
   )
   process.exit(1)
 }
