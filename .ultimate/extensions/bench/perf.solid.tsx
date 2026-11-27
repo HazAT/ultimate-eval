@@ -89,7 +89,7 @@ function Loaded(props: { versions: TrendVersion[] }) {
   // Picking a point brings its passes into view: they sit below every chart.
   const setSelected = (id: string) => {
     setStored(id)
-    requestAnimationFrame(() => detail?.scrollIntoView({ behavior: 'smooth', block: 'start' }))
+    requestAnimationFrame(() => detail?.scrollIntoView({ block: 'start' }))
   }
   // The newest point until one is picked; a stored one that is gone falls back to it too.
   const selected = createMemo(() => {
