@@ -51,9 +51,15 @@ pnpm eval perf --export <name>
 This black-box benchmark seeds 300 sidebar rows and two 300-turn transcripts using a fake model, then uses headless
 Chromium to measure load, switching, prompt-to-response, streaming, memory, reconnect and typing. It runs three
 repeats by default, one pass per commit each round, restoring each commit's seed before its pass. `--small` uses 50
-sidebar rows and 100 turns per transcript. The default workload took about 70 s to seed and 70 s per pass on main,
-excluding package install and the load gate. Before each pass the gate checks the 1-minute machine load every 15 s
-while it's above 4. After 30 min it runs anyway and marks the sample `timeout`.
+sidebar rows and 100 turns per transcript. Each pass includes two 40 s long replies. Before each pass the gate checks
+1-minute machine load every 15 s while it's above 4. After 30 min it runs anyway and marks the sample `timeout`.
+
+Switch visibility is timed from navigation to the first frame showing the target's seeded row (or, for the sidebar
+conversation, its empty state). Settling requires 300 ms of transcript quiet after visibility. Fresh SSE view
+arrival is measured separately, so a retained transcript can be visible before it. Short-reply `streamToVisibleMs`
+and `lastChunkToVisibleMs` mean visible at a rendering opportunity, not confirmed paint. Streaming `frames` measures
+a control reply without marker observation through 1 s after the last chunk. `progress` and `instrumentedFrames`
+come from a second reply, with the control's 1,600 lines already in the transcript.
 
 By default the user unit `ue-perf-<name>` runs the batch, with its log and live record in `runs/`. Reports keep
 harness versions and seed sizes separate. Changes under `src/`, `package.json`, or `pnpm-lock.yaml` prevent a

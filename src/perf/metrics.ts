@@ -28,15 +28,21 @@ export function liveRowVisible(row: VisibleElement, bounds: Bounds, covered: boo
     Math.max(bounds.left, rect.left) < Math.min(bounds.right, rect.right)
 }
 
+export function targetRowVisible(entry: number | null, visible: (selector: string) => boolean) {
+  // The empty sidebar target is always reached from a nonempty transcript. Oct 26 predates its data-ui hook.
+  return visible(entry === null ? '[data-ui="empty-state"], [class~="min-h-[55vh]"]' : `[data-entry-id="${entry}"]`)
+}
+
 type SourceEvent = { t: number; name: string; connection: number; url: string; conversation?: number }
 type Watch = { key?: number; echoed?: number; marks: (number | null)[] }
-type Target = { view: number; visible: number; settled: number }
+type Target = { visible: number; settled: number }
 
 export type Probe = {
   events: SourceEvent[]
   timings: { t: number; duration: number; type: string; name: string }[]
   coverMs: number | null
-  target: (id: number, entry: number | null, since: number, quietMs: number) => Target | false
+  startTarget: (entry: number | null, quietMs: number) => void
+  target?: Target
   stopTarget: () => void
   watchText: (user: string, markers: string[]) => void
   stopText: () => void
@@ -50,16 +56,15 @@ declare global {
   interface Window { perfProbe: Probe }
 }
 
-// Playwright serializes this function and the supplied row predicate; all other runtime dependencies are local.
-export function installProbe(rowVisible: typeof liveRowVisible) {
+// Playwright serializes this function and the supplied predicates; all other runtime dependencies are local.
+export function installProbe(rowVisible: typeof liveRowVisible, targetVisible: typeof targetRowVisible) {
   sessionStorage.setItem('ultimate.driven', '1')
   // Like Ultimate's browser tool, keep the warm-up tab and the measured tab from sharing shell selections.
   sessionStorage.setItem('ultimate.detached', '1')
-  const probe: Probe = { events: [], timings: [], coverMs: null, target, stopTarget, watchText, stopText, watchKeys }
+  const probe: Probe = { events: [], timings: [], coverMs: null, startTarget, stopTarget, watchText, stopText, watchKeys }
   window.perfProbe = probe
   const Native = window.EventSource
   let opened = 0
-  const views = new Map<number, number>()
   window.EventSource = class extends Native {
     constructor(input: string | URL, init?: EventSourceInit) {
       super(input, init)
@@ -72,18 +77,19 @@ export function installProbe(rowVisible: typeof liveRowVisible) {
           // Oct 26 sent bare view JSON; later views prefix it with a subscription ID and a newline.
           const id = name === 'view' && /^(?:\d+\n)?\{"conversation":\{"id":(\d+)/.exec((event as MessageEvent<string>).data.slice(0, 100))?.[1]
           const t = performance.now()
-          if (id) views.set(Number(id), t)
           probe.events.push({ t, name, connection, url, ...(id ? { conversation: Number(id) } : {}) })
         })
       }
     }
   }
-  for (const type of ['longtask', 'long-animation-frame', 'event']) {
-    if (!PerformanceObserver.supportedEntryTypes.includes(type)) continue
+  function observeTiming(type: string) {
+    if (!PerformanceObserver.supportedEntryTypes.includes(type)) return
     new PerformanceObserver((list) => {
       for (const entry of list.getEntries()) probe.timings.push({ t: entry.startTime, duration: entry.duration, type, name: entry.name })
     }).observe({ type, buffered: true, ...(type === 'event' ? { durationThreshold: 16 } : {}) })
   }
+  observeTiming('longtask')
+  observeTiming('long-animation-frame')
 
   const cover = () => document.getElementById('resume')?.checkVisibility({ opacityProperty: true, visibilityProperty: true }) === true
   // The inline HTML restores the cover before the app mounts. Only count it if it survives to a frame.
@@ -108,35 +114,44 @@ export function installProbe(rowVisible: typeof liveRowVisible) {
     const bounds = boundsOf(root)
     return [...root.querySelectorAll<HTMLElement>(selector)].some((row) => rowVisible(row, bounds, false))
   }
-  let observed: HTMLElement | undefined
-  let observedView: number | undefined
-  let visibleAt: number | undefined
-  let lastMutation = 0
-  const changes: MutationObserver = new MutationObserver(() => { lastMutation = performance.now() })
+  let stopWatchingTarget: (() => void) | undefined
   function stopTarget() {
-    changes.disconnect()
-    observed = undefined
-    observedView = undefined
-    visibleAt = undefined
-    lastMutation = 0
+    stopWatchingTarget?.()
+    stopWatchingTarget = undefined
+    delete probe.target
   }
-  function target(id: number, entry: number | null, since: number, quietMs: number) {
-    const view = views.get(id)
-    const root = transcript()
-    if (view === undefined || view < since || !root || cover()) return false
-    if (root !== observed) {
-      stopTarget()
-      if (quietMs) changes.observe(root, { subtree: true, childList: true, characterData: true, attributes: true })
+  function startTarget(entry: number | null, quietMs: number) {
+    stopTarget()
+    let observed: HTMLElement | null = null
+    let visibleAt: number | undefined
+    let lastMutation = 0
+    const changes = new MutationObserver(() => { lastMutation = performance.now() })
+    function observe(root: HTMLElement | null) {
+      if (root === observed) return
+      changes.disconnect()
       observed = root
+      lastMutation = performance.now()
+      if (root && quietMs) changes.observe(root, { subtree: true, childList: true, characterData: true, attributes: true })
     }
-    observedView ??= view
-    // Oct 26 predates the empty-state hook; its EmptyState styles its wrapper with min-h-[55vh].
-    const selector = entry === null ? '[data-ui="empty-state"], [class~="min-h-[55vh]"]' : `[data-entry-id="${entry}"]`
-    if (!visible(root, selector)) { visibleAt = undefined; return false }
-    const now = performance.now()
-    visibleAt ??= now
-    const settled = Math.max(visibleAt, lastMutation) + quietMs
-    return now >= settled && { view: observedView, visible: visibleAt, settled }
+    function frame() {
+      const root = transcript()
+      observe(root)
+      if (root && !cover() && targetVisible(entry, (selector) => visible(root, selector))) {
+        const now = performance.now()
+        // A retained row may already be visible at a rendering opportunity, before any fresh SSE view.
+        visibleAt ??= now
+        const settled = Math.max(visibleAt, lastMutation) + quietMs
+        if (now >= settled) {
+          changes.disconnect()
+          probe.target = { visible: visibleAt, settled }
+          return
+        }
+      }
+      pending = requestAnimationFrame(frame)
+    }
+    observe(transcript())
+    let pending = requestAnimationFrame(frame)
+    stopWatchingTarget = () => { changes.disconnect(); cancelAnimationFrame(pending) }
   }
 
   let stopWatchingText: (() => void) | undefined
@@ -163,7 +178,7 @@ export function installProbe(rowVisible: typeof liveRowVisible) {
       if (row.dataset.from === 'user') userRow = row
       else assistantRow = row
     }
-    function markPaint() {
+    function markVisible() {
       frame = 0
       if (cover()) return
       const bounds = boundsOf(content!)
@@ -193,7 +208,7 @@ export function installProbe(rowVisible: typeof liveRowVisible) {
         }
       }
     }
-    const schedule = () => { if (watch.key !== undefined && !frame) frame = requestAnimationFrame(markPaint) }
+    const schedule = () => { if (watch.key !== undefined && !frame) frame = requestAnimationFrame(markVisible) }
     const changes = new MutationObserver((records) => {
       if (watch.key === undefined) return
       for (const record of records) {
@@ -207,7 +222,7 @@ export function installProbe(rowVisible: typeof liveRowVisible) {
       }
       schedule()
     })
-    // Only changed nodes under the live transcript, and at most one paint check per frame on the new rows.
+    // Only changed nodes under the live transcript, and at most one visibility check per frame on the new rows.
     changes.observe(content, { subtree: true, childList: true, characterData: true })
     scroll.addEventListener('scroll', schedule, { passive: true })
     stopWatchingText = () => {
@@ -219,6 +234,7 @@ export function installProbe(rowVisible: typeof liveRowVisible) {
 
   let stopWatchingKeys: (() => void) | undefined
   function watchKeys(element: HTMLTextAreaElement, keys: string) {
+    if (!stopWatchingKeys) observeTiming('event')
     stopWatchingKeys?.()
     const observations: (number | null)[] = []
     probe.keys = observations

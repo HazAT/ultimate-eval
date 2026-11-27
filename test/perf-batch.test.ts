@@ -5,9 +5,9 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import test from 'node:test'
 import { perfPin } from '../src/perf/batch.ts'
-import type { PerfRecord } from '../src/perf/batch.ts'
+import type { PerfPass, PerfRecord } from '../src/perf/batch.ts'
 import type { Sample } from '../src/perf/browser.ts'
-import { exportPerf } from '../src/perf/export.ts'
+import { exportPerf, publicPerf } from '../src/perf/export.ts'
 import { cpuBusy, gateDecision, loadGate } from '../src/perf/load.ts'
 import { flatten, groupPerf, perfReport } from '../src/perf/report.ts'
 
@@ -18,38 +18,64 @@ const sample: Sample = {
   firstBuildMs: 0,
   firstLoad: { cold: { transcriptMs: 10, coverMs: null, dclMs: 20, fcpMs: 15, transferBytes: 50 }, warm: { error: hidden } },
   sendToResponse: { userMs: 1, answerMs: 2 },
-  ttft: { serverPrepMs: 1, streamToPaintMs: 2, totalMs: 3, lastChunkMs: 7, lastChunkToPaintMs: 2 },
-  switch: { cold: [{ id: 314, round: 0, viewMs: 10, visibleMs: 60, settledMs: 360, longMs: 55 }, { id: 315, round: 0, viewMs: 11, visibleMs: 80, settledMs: 380, longMs: 65 }], warm: [] },
+  ttft: { serverPrepMs: 1, streamToVisibleMs: 2, totalMs: 3, lastChunkMs: 7, lastChunkToVisibleMs: 2 },
+  switch: { cold: [{ id: 314, round: 0, freshViewMs: 10, visibleMs: 60, settledMs: 360, longMs: 55 }, { id: 315, round: 0, freshViewMs: 11, visibleMs: 80, settledMs: 380, longMs: 65 }], warm: [] },
   streaming: { progress: { markers: [{ line: 100, sentMs: 2000, visibleMs: 2030, lagMs: 30 }], visibleCount: 1, firstProgressMs: 2030, maxGapMs: null, p95GapMs: null, p95LagMs: 30 },
-    longtask: { count: 0, totalMs: 0, p95Ms: null }, longAnimationFrame: null, rafGapsOver33Ms: 0 },
+    frames: { longtask: { count: 0, totalMs: 0, p95Ms: null }, longAnimationFrame: null, rafGapsOver33Ms: 0 },
+    instrumentedFrames: { longtask: { count: 1, totalMs: 51, p95Ms: 51 }, longAnimationFrame: null, rafGapsOver33Ms: 2 } },
   memory: { jsHeapUsedMB: 20, nodes: 25, jsEventListeners: 2 },
   reconnect: { startedAt: 1000, readyAt: 1100, viewAt: 1200, handshakeMs: null, readyToViewMs: 100, outageMs: 200, restartBuildMs: { error: hidden } },
   keypress: { error: hidden },
 }
+const pass = { commit, repeat: 1, at: 'start', seconds: 60, load1Start: 4, load1End: 5, cpuBusy: 0.3,
+  gate: 'ready', waitedSec: 15, sample } satisfies PerfPass
 const record: PerfRecord = {
   name: 'small', commits: [commit], repeat: 1, evalCommit, small: true, dates: { [commit]: '2026-01-02' },
   pid: 1, startedAt: 'start', finishedAt: 'end', complete: true,
   seeds: { [commit]: { sidebar: 50, turns: 100, entryCounts: [2, 2], toolCounts: [1, 1], seconds: 9 } },
-  samples: [{ commit, repeat: 1, at: 'start', seconds: 60, load1Start: 4, load1End: 5, cpuBusy: 0.3, gate: 'ready', waitedSec: 15, sample }],
+  samples: [pass],
 }
 
 test('flattens metrics and distinguishes errors from missing observations', () => {
   const flat = flatten(sample)
   assert.deepEqual(flat.firstBuildMs, { value: 0, error: false })
   assert.deepEqual(flat['firstLoad.cold.transcriptMs'], { value: 10, error: false })
-  assert.deepEqual(flat['firstLoad.warm.transcriptMs'], { value: null, error: true })
+  assert.deepEqual(flat['firstLoad.warm'], { value: null, error: true })
   assert.deepEqual(flat['switch.cold.visibleMs'], { value: 70, error: false })
   assert.deepEqual(flat['switch.cold.settledMs'], { value: 370, error: false })
   assert.deepEqual(flat['streaming.line100.lagMs'], { value: 30, error: false })
-  assert.deepEqual(flat['switch.warm.settledMs'], { value: null, error: false })
-  assert.deepEqual(flat['streaming.longtask.p95Ms'], { value: null, error: false })
+  assert.equal(flat['switch.warm.settledMs'], undefined)
+  assert.deepEqual(flat['streaming.frames.longtask.p95Ms'], { value: null, error: false })
+  assert.deepEqual(flat['streaming.instrumentedFrames.rafGapsOver33Ms'], { value: 2, error: false })
   assert.deepEqual(flat['reconnect.restartBuildMs'], { value: null, error: true })
-  assert.deepEqual(flat['keypress.duration.p95Ms'], { value: null, error: true })
+  assert.deepEqual(flat.keypress, { value: null, error: true })
   assert.equal(flat['reconnect.startedAt'], undefined)
-  const historical = structuredClone(sample)
-  if ('cold' in historical.switch) for (const point of historical.switch.cold) Reflect.deleteProperty(point, 'visibleMs')
-  assert.deepEqual(flatten(historical)['switch.cold.visibleMs'], { value: null, error: false })
-  assert.deepEqual(flatten(historical)['switch.cold.settledMs'], flat['switch.cold.settledMs'])
+})
+
+test('report and export retain historical and unknown numeric leaves under their original names', () => {
+  const historical = {
+    ...sample,
+    ttft: { streamToPaintMs: 2 },
+    reconnect: { readyToEventMs: 17, firstEventAt: 1200 },
+    keypress: { inputDelay: { medianMs: 1, p95Ms: 3 } },
+    switch: { cold: [{ id: 314, round: 0, viewMs: 20, settledMs: 360 }] },
+    extra: { nested: [42], note: hidden },
+  }
+  const flat = flatten(historical)
+  assert.deepEqual(flat['extra.nested.0'], { value: 42, error: false })
+  assert.deepEqual(flat['switch.cold.settledMs'], { value: 360, error: false })
+  assert.equal(flat['switch.cold.visibleMs'], undefined)
+  assert.equal(flat['ttft.streamToVisibleMs'], undefined)
+  const old = { ...record, samples: [{ ...pass, sample: historical as unknown as Sample }] }
+  const report = perfReport([old])
+  const { samples: [published] } = publicPerf(old)
+  for (const [key, value] of Object.entries({ 'extra.nested.0': 42, 'reconnect.readyToEventMs': 17,
+    'keypress.inputDelay.p95Ms': 3, 'ttft.streamToPaintMs': 2, 'switch.cold.viewMs': 20 })) {
+    assert.ok(report.includes(`\n${key}\ncommit`))
+    assert.equal(published!.metrics[key], value)
+  }
+  assert.equal(published!.metrics['reconnect.readyToViewMs'], undefined)
+  assert.equal(published!.metrics['switch.cold.freshViewMs'], undefined)
 })
 
 test('reports separate eval commits and sizes, preserving first supplied commit order', () => {
@@ -58,7 +84,11 @@ test('reports separate eval commits and sizes, preserving first supplied commit 
   const dirty = { ...record, evalDiff: 'd'.repeat(64), name: 'dirty' }
   assert.deepEqual(groupPerf([record, another, record, large, dirty, dirty]), [[record, record], [another], [large], [dirty, dirty]])
   const firstCommit = 'd'.repeat(40)
-  const report = perfReport([{ ...record, commits: [firstCommit, commit], dates: { ...record.dates, [firstCommit]: '2026-01-01' } }, another])
+  const otherPass = { ...pass, commit: firstCommit, sample: {
+    ...sample, firstLoad: { ...sample.firstLoad, warm: sample.firstLoad.cold },
+  } }
+  const report = perfReport([{ ...record, commits: [firstCommit, commit], dates: { ...record.dates, [firstCommit]: '2026-01-01' },
+    samples: [...record.samples, otherPass] }, another])
   assert.match(report, /firstLoad.cold.transcriptMs\ncommit[^\n]+\nddddddd 2026-01-01[^\n]+\naaaaaaa 2026-01-02\s+10.00\s+10.00–10.00\s+1\s+0/)
   assert.match(report, /firstLoad.warm.transcriptMs\ncommit[^\n]+\nddddddd[^\n]+\naaaaaaa 2026-01-02\s+—\s+—\s+0\s+1/)
   assert.equal((report.match(/^eval /gm) ?? []).length, 2)
@@ -123,7 +153,7 @@ test('perf export drops private details and refuses leaked paths and URLs in pub
     assert.deepEqual(Object.keys(pub), ['commits', 'evalCommit', 'seeds', 'samples'])
     assert.deepEqual(pub.seeds[commit], { sidebar: 50, turns: 100, entryCounts: [2, 2], toolCounts: [1, 1] })
     assert.equal(pub.samples[0].metrics['switch.cold.settledMs'], 370)
-    assert.equal(pub.samples[0].metrics['firstLoad.warm.transcriptMs'], null)
+    assert.equal(pub.samples[0].metrics['firstLoad.warm'], null)
   } finally {
     rmSync(tmp, { recursive: true, force: true })
   }

@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
-import { keypressStats, liveRowVisible, median, percentile } from '../src/perf/metrics.ts'
+import { keypressStats, liveRowVisible, median, percentile, targetRowVisible } from '../src/perf/metrics.ts'
 
 test('performance percentiles interpolate sorted samples without changing the input', () => {
   const values = [40, 10, 30, 20]
@@ -22,6 +22,16 @@ test('keypress statistics require exactly one painted observation for each physi
   assert.equal(duration.p95Ms.toFixed(2), '27.55')
   assert.throws(() => keypressStats([...keys, 9], 30), /31 keydowns/)
   assert.throws(() => keypressStats([null, ...keys.slice(1)], 30), /29 of 30 physical keys/)
+})
+
+test('switch visibility checks the target row even before any fresh view', () => {
+  const visible = new Set(['[data-entry-id="42"]'])
+  const inTranscript = (selector: string) => visible.has(selector)
+  assert.equal(targetRowVisible(43, inTranscript), false) // The previous conversation is still on screen.
+  visible.add('[data-entry-id="43"]')
+  assert.equal(targetRowVisible(43, inTranscript), true) // The retained target is already visible.
+  assert.equal(targetRowVisible(null, inTranscript), false)
+  assert.equal(targetRowVisible(null, (selector) => selector.includes('[data-ui="empty-state"]')), true)
 })
 
 test('a visible row must be in the live app, uncovered, and intersect the scroll viewport', () => {

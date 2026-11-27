@@ -1,17 +1,18 @@
 import { setTimeout } from 'node:timers/promises'
-import { chromium } from 'playwright-core'
+import { chromium, errors } from 'playwright-core'
 import type { Page } from 'playwright-core'
 import type { Entry } from '../api.ts'
 import { longLine, shortFirst, shortLast } from './fake.ts'
 import type { perfInstance } from './instance.ts'
-import { installProbe, keypressStats, liveRowVisible, percentile } from './metrics.ts'
+import { installProbe, keypressStats, liveRowVisible, percentile, targetRowVisible } from './metrics.ts'
 import { longPrompt } from './seed.ts'
 import type { seed } from './seed.ts'
 
 type Metric<T> = T | { error: string }
 type Load = { dclMs: number; fcpMs: number; transcriptMs: number; coverMs: number | null; transferBytes: number }
-type Switch = { id: number; round: number; viewMs: number; visibleMs: number; settledMs: number; longMs: number }
+type Switch = { id: number; round: number; freshViewMs: number | null; visibleMs: number; settledMs: number; longMs: number }
 type Distribution = { count: number; totalMs: number; p95Ms: number | null }
+type Frames = { longtask: Distribution; longAnimationFrame: Omit<Distribution, 'p95Ms'> | null; rafGapsOver33Ms: number }
 type Progress = {
   markers: { line: number; sentMs: number; visibleMs: number | null; lagMs: number | null }[]
   visibleCount: number; firstProgressMs: number; maxGapMs: number | null; p95GapMs: number | null; p95LagMs: number | null
@@ -21,9 +22,9 @@ export type Sample = {
   firstBuildMs: Metric<number>
   firstLoad: { cold: Metric<Load>; warm: Metric<Load> }
   sendToResponse: Metric<{ userMs: number; answerMs: number }>
-  ttft: Metric<{ serverPrepMs: number; streamToPaintMs: number; totalMs: number; lastChunkMs: number; lastChunkToPaintMs: number }>
+  ttft: Metric<{ serverPrepMs: number; streamToVisibleMs: number; totalMs: number; lastChunkMs: number; lastChunkToVisibleMs: number }>
   switch: Metric<{ cold: Switch[]; warm: Switch[] }>
-  streaming: Metric<{ progress: Progress; longtask: Distribution; longAnimationFrame: Omit<Distribution, 'p95Ms'> | null; rafGapsOver33Ms: number }>
+  streaming: Metric<{ progress: Progress; frames: Frames; instrumentedFrames: Frames }>
   memory: Metric<{ jsHeapUsedMB: number; nodes: number; jsEventListeners: number }>
   reconnect: Metric<{ startedAt: number; readyAt: number; viewAt: number; handshakeMs: number | null; readyToViewMs: number; outageMs: number; restartBuildMs: Metric<number> }>
   keypress: Metric<ReturnType<typeof keypressStats> & { eventTimingCount: number }>
@@ -32,7 +33,7 @@ export type Sample = {
 const shortPrompt = 'Benchmark this short reply.'
 const markerLines = Array.from({ length: 16 }, (_, i) => (i + 1) * 100)
 const sum = (values: number[]) => values.reduce((total, value) => total + value, 0)
-const probeScript = { content: `(${installProbe.toString()})(${liveRowVisible.toString()})` }
+const probeScript = { content: `(${installProbe.toString()})(${liveRowVisible.toString()}, ${targetRowVisible.toString()})` }
 
 // Oct 26's root is the read-only History screen. Navigate to seeded conversations and use the cross-era textarea,
 // rather than composer data-ui hooks which arrived in November. The reload cover can clone that textarea too.
@@ -107,10 +108,9 @@ export async function measure(instance: Awaited<ReturnType<typeof perfInstance>>
       if (!last) throw new Error(`no completed seed reply in transcript #${id}`)
       return last.id
     }
-    async function target(id: number, entry: number | null, since = 0, quietMs = 0) {
+    async function waitForTarget() {
       try {
-        const ready = await page.waitForFunction(({ id, entry, since, quietMs }) =>
-          window.perfProbe?.target(id, entry, since, quietMs), { id, entry, since, quietMs })
+        const ready = await page.waitForFunction(() => window.perfProbe?.target)
         const result = await ready.jsonValue()
         if (!result) throw new Error('target timing missing')
         return result
@@ -118,11 +118,15 @@ export async function measure(instance: Awaited<ReturnType<typeof perfInstance>>
         await page.evaluate(() => window.perfProbe?.stopTarget()).catch(() => {})
       }
     }
+    async function target(entry: number | null, quietMs = 0) {
+      await page.evaluate(({ entry, quietMs }) => window.perfProbe.startTarget(entry, quietMs), { entry, quietMs })
+      return waitForTarget()
+    }
     let loadEntry: number | undefined
     async function load(): Promise<Load> {
       loadEntry ??= await lastReply(a!)
       await navigate(a!)
-      const { visible: transcriptMs } = await target(a!, loadEntry)
+      const { visible: transcriptMs } = await target(loadEntry)
       const loaded = await page.waitForFunction(() => {
         const navigation = performance.getEntriesByType('navigation')[0] as PerformanceNavigationTiming
         const fcp = performance.getEntriesByName('first-contentful-paint')[0]
@@ -145,31 +149,31 @@ export async function measure(instance: Awaited<ReturnType<typeof perfInstance>>
     const warm = await record('firstLoad.warm', load)
     const switches = await record('switch', measureSwitches)
 
-    async function arm(user: string, markers: string[]) {
+    async function send(user: string, markers?: string[]) {
       await composer(page).focus()
       await page.keyboard.type(user)
-      await page.evaluate(({ user, markers }) => window.perfProbe.watchText(user, markers), { user, markers })
+      if (markers) await page.evaluate(({ user, markers }) => window.perfProbe.watchText(user, markers), { user, markers })
       const offset = instance.fake.requests.length
       await page.keyboard.press('Enter')
       return offset
     }
-    async function request(offset: number, text: string) {
+    async function request(offset: number, text: string, chunks = 1, timeoutMs = 15_000) {
       const started = performance.now()
       for (;;) {
         check()
-        const found = instance.fake.requests.slice(offset).find((item) => item.lastUserText === text && item.firstChunkAt !== undefined)
+        const found = instance.fake.requests.slice(offset).find((item) => item.lastUserText === text && item.chunkSentAt.length >= chunks)
         if (found) return found as typeof found & { firstChunkAt: number }
-        if (performance.now() - started > 15_000) throw new Error(`fake did not stream a reply for ${JSON.stringify(text)}`)
+        if (performance.now() - started > timeoutMs) throw new Error(`fake did not send ${chunks} chunk(s) for ${JSON.stringify(text)}`)
         await setTimeout(20, undefined, { signal })
       }
     }
     let short: { key: number; first: number; last: number; offset: number } | undefined
     const sendToResponse = await record('sendToResponse', async () => {
       await navigate(b)
-      await target(b, await lastReply(b))
+      await target(await lastReply(b))
       instance.fake.chunkMs = 25
       try {
-        const offset = await arm(shortPrompt, [shortFirst, shortLast])
+        const offset = await send(shortPrompt, [shortFirst, shortLast])
         const timing = await page.waitForFunction(() => {
           const watch = window.perfProbe.watch!
           const [first, last] = watch.marks
@@ -190,9 +194,10 @@ export async function measure(instance: Awaited<ReturnType<typeof perfInstance>>
       if (!short) throw new Error('short send did not reach the live transcript')
       const timing = await request(short.offset, shortPrompt)
       if (!timing.lastChunkAt || timing.chunkSentAt.length !== 40) throw new Error('fake did not finish the 40-chunk reply')
+      // The rAF checks show when the first and last chunks are visible at a rendering opportunity, not when pixels paint.
       return {
-        serverPrepMs: timing.arrivedAt - short.key, streamToPaintMs: short.first - timing.firstChunkAt, totalMs: short.first - short.key,
-        lastChunkMs: short.last - short.key, lastChunkToPaintMs: short.last - timing.lastChunkAt,
+        serverPrepMs: timing.arrivedAt - short.key, streamToVisibleMs: short.first - timing.firstChunkAt, totalMs: short.first - short.key,
+        lastChunkMs: short.last - short.key, lastChunkToVisibleMs: short.last - timing.lastChunkAt,
       }
     })
 
@@ -200,30 +205,36 @@ export async function measure(instance: Awaited<ReturnType<typeof perfInstance>>
       // Switch before any sends, so every large target ends at its last seeded reply. Start from a fresh tab store.
       const entries = new Map([[a, await lastReply(a)], [b, await lastReply(b)], [sidebar, null]])
       await navigate(start)
-      await target(start, null)
+      await target(null)
       const cold: Switch[] = [], warm: Switch[] = []
       for (let round = 0; round < 3; round++) {
         for (const id of [a, sidebar, b]) {
           check()
-          const began = await page.evaluate((id) => {
+          const began = await page.evaluate(({ id, entry }) => {
+            window.perfProbe.startTarget(entry, 300)
             const now = performance.now()
             history.pushState(null, '', `/?conversation=${id}`)
             dispatchEvent(new PopStateEvent('popstate'))
             return now
-          }, id)
-          const { view, visible, settled } = await target(id, entries.get(id)!, began, 300)
+          }, { id, entry: entries.get(id)! })
+          const { visible, settled } = await waitForTarget()
+          // Read the first fresh SSE view separately; it cannot reset the display or quiet timers.
+          const fresh = await page.waitForFunction(({ id, began }) => window.perfProbe.events.find((event) =>
+            event.conversation === id && event.t >= began), { id, began }).catch((error: unknown) => {
+            if (!(error instanceof errors.TimeoutError)) throw error
+            return null
+          })
+          const view = await fresh?.jsonValue()
           const durations = await page.evaluate(({ began, settled }) => window.perfProbe.timings
             .filter((entry) => entry.type === 'longtask' && entry.t >= began && entry.t <= settled).map((entry) => entry.duration), { began, settled })
-          ;(round === 0 ? cold : warm).push({ id, round, viewMs: view - began, visibleMs: visible - began, settledMs: settled - began, longMs: sum(durations) })
+          ;(round === 0 ? cold : warm).push({ id, round, freshViewMs: view ? view.t - began : null, visibleMs: visible - began,
+            settledMs: settled - began, longMs: sum(durations) })
         }
       }
       return { cold, warm }
     }
 
-    const streaming = await record('streaming', async () => {
-      if (page.url() !== url(b)) await navigate(b)
-      await target(b, await lastReply(b))
-      instance.fake.chunkMs = 25
+    async function stream(markers?: string[]) {
       await page.evaluate(() => {
         const frames: number[] = []
         window.perfProbe.frames = frames
@@ -235,28 +246,48 @@ export async function measure(instance: Awaited<ReturnType<typeof perfInstance>>
         requestAnimationFrame(frame)
       })
       try {
-        const offset = await arm(longPrompt, markerLines.map(longLine))
-        const timing = await request(offset, longPrompt)
-        await page.waitForFunction(() => window.perfProbe.watch?.marks.at(-1) != null, undefined, { timeout: 90_000 })
+        const offset = await send(longPrompt, markers)
+        const timing = await request(offset, longPrompt, markers ? 1 : 1600, markers ? 15_000 : 90_000)
+        if (markers) await page.waitForFunction(() => window.perfProbe.watch?.marks.at(-1) != null, undefined, { timeout: 90_000 })
         if (timing.chunkSentAt.length !== 1600 || !timing.lastChunkAt || timing.lastChunkAt - timing.firstChunkAt < 39_000)
           throw new Error('fake did not deliver the paced 1,600-chunk reply')
-        const metrics = await page.evaluate((firstChunk) => {
+        // The control pass never reads the transcript. Allow a fixed tail for the client to apply the last chunk.
+        const controlEnd = markers ? null : timing.lastChunkAt + 1000
+        if (controlEnd !== null) await setTimeout(Math.max(0, controlEnd - Date.now()), undefined, { signal })
+        const metrics = await page.evaluate(({ firstChunk, controlEnd }) => {
           const probe = window.perfProbe
           const start = firstChunk - performance.timeOrigin
-          const visible = probe.watch!.marks.map((t) => t === null ? null : t - start)
-          const end = probe.watch!.marks.at(-1)!
+          const end = controlEnd === null ? probe.watch!.marks.at(-1)! : controlEnd - performance.timeOrigin
           const windowed = probe.timings.filter((entry) => entry.t >= start && entry.t <= end)
           return {
-            visible,
+            visible: probe.watch?.marks.map((t) => t === null ? null : t - start),
             tasks: windowed.filter((entry) => entry.type === 'longtask').map((entry) => entry.duration),
             frames: PerformanceObserver.supportedEntryTypes.includes('long-animation-frame')
               ? windowed.filter((entry) => entry.type === 'long-animation-frame').map((entry) => entry.duration) : null,
             gaps: probe.frames!.filter((t, i, frames) => i > 0 && t >= start && t <= end && t - frames[i - 1]! > 33).length,
           }
-        }, timing.firstChunkAt)
+        }, { firstChunk: timing.firstChunkAt, controlEnd })
+        return { timing, visible: metrics.visible, frames: {
+          longtask: { count: metrics.tasks.length, totalMs: sum(metrics.tasks), p95Ms: percentile(metrics.tasks, 0.95) },
+          longAnimationFrame: metrics.frames && { count: metrics.frames.length, totalMs: sum(metrics.frames) },
+          rafGapsOver33Ms: metrics.gaps,
+        } }
+      } finally {
+        await page.evaluate(() => { delete window.perfProbe.frames; window.perfProbe.stopText() }).catch(() => {})
+      }
+    }
+    const streaming = await record('streaming', async () => {
+      if (page.url() !== url(b)) await navigate(b)
+      await target(await lastReply(b))
+      instance.fake.chunkMs = 25
+      try {
+        // Run the control first in the same pre-long-reply transcript state in every era.
+        // The marker pass starts with the control's 1,600-line reply already in the transcript.
+        const { frames } = await stream()
+        const { timing, visible: marks, frames: instrumentedFrames } = await stream(markerLines.map(longLine))
         const markers = markerLines.map((line, i) => {
           const sentMs = timing.chunkSentAt[line - 1]! - timing.firstChunkAt
-          const visibleMs = metrics.visible[i]!
+          const visibleMs = marks![i]!
           return { line, sentMs, visibleMs, lagMs: visibleMs === null ? null : visibleMs - sentMs }
         })
         const visible = markers.flatMap((mark) => mark.visibleMs ?? []).sort((a, b) => a - b)
@@ -265,13 +296,10 @@ export async function measure(instance: Awaited<ReturnType<typeof perfInstance>>
           // Track the first progress separately: a renderer showing only the last marker has no inter-marker gaps.
           progress: { markers, visibleCount: visible.length, firstProgressMs: visible[0]!, maxGapMs: gaps.length ? Math.max(...gaps) : null,
             p95GapMs: percentile(gaps, 0.95), p95LagMs: percentile(markers.flatMap((mark) => mark.lagMs ?? []), 0.95) },
-          longtask: { count: metrics.tasks.length, totalMs: sum(metrics.tasks), p95Ms: percentile(metrics.tasks, 0.95) },
-          longAnimationFrame: metrics.frames && { count: metrics.frames.length, totalMs: sum(metrics.frames) },
-          rafGapsOver33Ms: metrics.gaps,
+          frames, instrumentedFrames,
         }
       } finally {
         instance.fake.chunkMs = pace
-        await page.evaluate(() => { delete window.perfProbe.frames; window.perfProbe.stopText() }).catch(() => {})
       }
     })
     const memory = await record('memory', async () => {
@@ -288,7 +316,7 @@ export async function measure(instance: Awaited<ReturnType<typeof perfInstance>>
     const keypress = await record('keypress', async () => {
       // Use the unchanged seed on a quiet transcript, not a partially rebuilt page after restart.
       await navigate(a)
-      await target(a, await lastReply(a), 0, 300)
+      await target(await lastReply(a), 300)
       const keys = 'abcdefghijklmnopqrstuvwxyz1234'
       await composer(page).focus()
       const from = await composer(page).evaluate((element, keys) => {
@@ -309,7 +337,7 @@ export async function measure(instance: Awaited<ReturnType<typeof perfInstance>>
     })
     const reconnect = await record('reconnect', async () => {
       if (page.url() !== url(a)) await navigate(a)
-      await target(a, await lastReply(a))
+      await target(await lastReply(a))
       const startedAt = Date.now()
       await instance.restart()
       const readyAt = Date.now()
