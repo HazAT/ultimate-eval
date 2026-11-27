@@ -220,7 +220,8 @@ export type Started = { child: ChildProcess; base: string; exited: boolean }
 
 /**
  * Start a supervised scratch Ultimate from `clone` on project `root`, with its own `home` and port and the scratch
- * `userHome`; resolves once it serves. Its process group joins `groups`, so the caller stops it.
+ * `userHome`; resolves once it serves. Its process group joins `groups`, so the caller stops it. Pass `env` to
+ * replace the inherited environment, and `port` to reuse the same endpoint on restart.
  */
 export async function startInstance(options: {
   clone: string
@@ -230,18 +231,20 @@ export async function startInstance(options: {
   groups: Set<ChildProcess>
   cancelled: () => boolean
   log: (line: string) => void
+  env?: NodeJS.ProcessEnv
+  port?: number
 }) {
   const { clone, root, home, userHome, groups, cancelled, log } = options
   const name = root.split('/').at(-1)
   mkdirSync(home, { recursive: true })
-  const base = `http://127.0.0.1:${await freePort()}`
+  const base = `http://127.0.0.1:${options.port ?? await freePort()}`
   log(`starting ${name} at ${base}`)
   if (cancelled()) throw new Error('cancelled')
   const child = spawn(process.execPath, ['bin/ultimate.ts', root, '--port', new URL(base).port, '--no-open'], {
     cwd: clone,
     detached: true,
     stdio: ['ignore', 'ignore', 'ignore'],
-    env: { ...cleanEnv(), ULTIMATE_HOME: home, ULTIMATE_USER_HOME: userHome, ULTIMATE_NO_OPEN: '1' },
+    env: { ...(options.env ?? cleanEnv()), ULTIMATE_HOME: home, ULTIMATE_USER_HOME: userHome, ULTIMATE_NO_OPEN: '1' },
   })
   groups.add(child)
   const state: Started = { child, base, exited: false }
@@ -250,7 +253,7 @@ export async function startInstance(options: {
     if (cancelled()) throw new Error('cancelled')
     if (state.exited) throw new Error(`the scratch server of ${name} exited while starting`)
     if (i > 480) throw new Error(`the scratch server of ${name} did not become ready in 2 minutes`)
-    if (await fetch(`${base}/api/models`).then((r) => r.ok, () => false)) break
+    if (await fetch(`${base}/api/models`, { headers: { origin: base } }).then((r) => r.ok, () => false)) break
     await new Promise((d) => setTimeout(d, 250))
   }
   return state

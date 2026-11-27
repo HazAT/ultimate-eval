@@ -365,6 +365,11 @@ export class Instance {
           continue
         } else if (name === 'conversations') {
           this.conversations = payload
+          // The Oct 26 server sends the list directly, without a `stream` handshake. A list-only client is ready here.
+          if (!this.subs.size) {
+            this.downSince = undefined
+            onReady()
+          }
           key = name
         } else if (name === 'conversationsOps') {
           this.conversations = applyOps(this.conversations, payload) as Summary[]
