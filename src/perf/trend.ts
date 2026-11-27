@@ -74,7 +74,7 @@ export function measuringCode(root: string, evalCommit: string) {
 
 /** A commit pin from a record, checked before it reaches git as an argument. */
 const pinned = (sha: string) => {
-  if (!/^[0-9a-f]{40}$/.test(sha)) throw new Error(`not a commit pin: ${String(sha).slice(0, 50)}`)
+  if (typeof sha !== 'string' || !/^[0-9a-f]{40}$/.test(sha)) throw new Error(`not a commit pin: ${String(sha).slice(0, 50)}`)
   return sha
 }
 /** A batch whose pins are all commits; any other is skipped. */
@@ -163,7 +163,10 @@ export type TrendInfo = {
 }
 
 function stat(passes: TrendPass[], key: string): Stat {
-  const values = passes.flatMap((pass) => pass.metrics[key] ?? [])
+  const values = passes.flatMap((pass) => {
+    const value = Object.hasOwn(pass.metrics, key) ? pass.metrics[key] : undefined
+    return typeof value === 'number' ? [value] : []
+  })
   const failed = passes.filter((pass) => pass.error !== undefined ||
     Object.keys(pass.errors).some((path) => key === path || key.startsWith(`${path}.`))).length
   return {

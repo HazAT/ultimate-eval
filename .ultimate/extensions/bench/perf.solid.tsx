@@ -489,13 +489,13 @@ function Passes(props: { point: PerfPoint }) {
 
 const SHOWN = new Set(ROWS.flatMap((b) => b.rows.map(([key]) => key)))
 
-/** Every other recorded metric (the stream's per-line marks are in its curve), folded away. */
+/** Every other recorded metric (the stream's per-line lag is in its curve; its sent and visible times are here), folded away. */
 function Rest(props: { passes: TrendPass[]; cols: string }) {
   const keys = createMemo(() =>
     // A failed measurement's own path is left out when the rows above already show it failed.
     [...new Set(props.passes.flatMap((p) => [...Object.keys(p.metrics), ...Object.keys(p.errors)]))]
-      .filter((key) => !SHOWN.has(key) && !key.startsWith('streaming.line') && ![...SHOWN].some((s) => s.startsWith(`${key}.`)))
-      .toSorted(),
+      .filter((key) => !SHOWN.has(key) && !/^streaming\.line\d+\.lagMs$/.test(key) && ![...SHOWN].some((s) => s.startsWith(`${key}.`)))
+      .toSorted((a, b) => a.localeCompare(b, 'en', { numeric: true })),
   )
   return (
     <Show when={keys().length > 0}>
