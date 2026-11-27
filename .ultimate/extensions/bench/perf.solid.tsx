@@ -2,6 +2,7 @@
 // Perf: the black-box performance trend from `pnpm eval perf`. One small chart per headline metric (median of the
 // repeats with a min–max band), every batch × Ultimate commit a column, eval versions side by side and never joined;
 // a column opens that point's passes in full.
+import { ArrowLeft } from '@lucide/solid'
 import type { JSX } from '@solidjs/web'
 import { For, Match, Show, Switch, createMemo } from 'solid-js'
 import { Button } from '@/components/ui/button.solid.tsx'
@@ -40,16 +41,32 @@ export function fmt(key: string, value: number | null | undefined) {
   if (value === null || value === undefined) return '–'
   if (key.endsWith('MB')) return `${value.toFixed(1)} MB`
   if (key.endsWith('Bytes')) return formatBytes(value)
-  if (/(count|Count|nodes|Listeners|Over33Ms|load1|repeat)$/.test(key)) return String(Math.round(value * 100) / 100)
+  if (key.startsWith('load1')) return value.toFixed(2)
+  if (/(count|Count|nodes|Listeners|Over33Ms)$/.test(key)) return String(Math.round(value))
   if (key === 'cpuBusy') return `${Math.round(value * 100)}%`
   if (key.endsWith('Sec')) return `${value.toFixed(1)} s`
   return Math.abs(value) >= 10_000 ? `${(value / 1000).toFixed(1)} s` : `${Math.round(value)} ms`
 }
 
-export function Perf() {
+/** `back` is given on a phone, which has no run column to leave by. */
+export function Perf(props: { back?: () => void }) {
   const trend = useAction(PerfAction, null, { focus: true })
   return (
     <div class="mx-auto max-w-5xl px-4 py-5 @container md:px-6">
+      <Show when={props.back}>
+        {(back) => (
+          <Button
+            aria-label="Back to the overview"
+            class="mb-3 h-auto gap-1 p-0 font-mono text-[11px] font-normal text-muted-foreground hover:text-foreground"
+            onClick={() => back()()}
+            size={null}
+            variant={null}
+          >
+            <ArrowLeft class="size-3" />
+            overview
+          </Button>
+        )}
+      </Show>
       <Switch fallback={<Note>loading performance batches…</Note>}>
         <Match when={trend.error()}>{(error) => <Note class="text-error">{errorMessage(error())}</Note>}</Match>
         <Match when={trend.data()?.length === 0}>
@@ -67,7 +84,13 @@ function Loaded(props: { versions: TrendVersion[] }) {
       version.points.map((point, i): Column => ({ point, version, versionIndex, first: i === 0 })),
     ),
   )
-  const [stored, setSelected] = useExtensionUiState<string | null>('perfPoint', null)
+  const [stored, setStored] = useExtensionUiState<string | null>('perfPoint', null)
+  let detail: HTMLDivElement | undefined
+  // Picking a point brings its passes into view: they sit below every chart.
+  const setSelected = (id: string) => {
+    setStored(id)
+    requestAnimationFrame(() => detail?.scrollIntoView({ behavior: 'smooth', block: 'start' }))
+  }
   // The newest point until one is picked; a stored one that is gone falls back to it too.
   const selected = createMemo(() => {
     const all = columns()
@@ -100,9 +123,11 @@ function Loaded(props: { versions: TrendVersion[] }) {
           </section>
         )}
       </For>
-      <Show when={selected()} keyed>
-        {(column) => <PointDetail column={column} />}
-      </Show>
+      <div class="scroll-mt-4" ref={detail}>
+        <Show when={selected()} keyed>
+          {(column) => <PointDetail column={column} />}
+        </Show>
+      </div>
     </div>
   )
 }
@@ -307,7 +332,12 @@ function Chart(props: { metric: string; label: string; columns: Column[]; select
       <div class="relative mt-0.5 h-3.5 font-mono text-[10px] text-muted-foreground/60">
         <For each={props.columns}>
           {(c, i) => (
-            <Show when={props.columns.length <= 8 || c.first || i() === props.columns.length - 1}>
+            <Show
+              when={
+                (props.columns.length <= 8 || c.first || i() === props.columns.length - 1) &&
+                (i() === 0 || dateOf(props.columns[i() - 1]!.point) !== dateOf(c.point))
+              }
+            >
               <span class="absolute -translate-x-1/2 whitespace-nowrap" style={{ left: `${(x(i()) / W) * 100}%` }}>
                 {dateOf(c.point)}
               </span>
@@ -405,7 +435,7 @@ const meta = (pass: TrendPass, key: string): number | null | undefined =>
 
 function Passes(props: { point: PerfPoint }) {
   const passes = () => props.point.passes.toSorted((a, b) => a.repeat - b.repeat)
-  const cols = () => `11rem repeat(${passes().length}, minmax(4.5rem, 1fr))`
+  const cols = () => `12rem repeat(${passes().length}, 5.5rem)`
   return (
     <div class="space-y-5">
       <div class="grid gap-x-8 gap-y-5 @3xl:grid-cols-2">
@@ -511,8 +541,8 @@ function StreamCurve(props: { passes: TrendPass[] }) {
         </div>
       </Box>
       <div
-        class="mt-2 grid gap-x-2 gap-y-[2px] overflow-x-auto font-mono text-[10.5px] tabular-nums"
-        style={{ 'grid-template-columns': '2.5rem repeat(16, minmax(2.6rem, 1fr))' }}
+        class="mt-2 grid gap-x-1 gap-y-[2px] overflow-x-auto font-mono text-[10.5px] tabular-nums"
+        style={{ 'grid-template-columns': '2rem repeat(16, minmax(2.1rem, 1fr))' }}
       >
         <span class="text-muted-foreground/60">line</span>
         <For each={LINES}>{(l) => <span class="text-right text-muted-foreground/60">{l}</span>}</For>

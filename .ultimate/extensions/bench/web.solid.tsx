@@ -122,7 +122,7 @@ function Bench() {
           </nav>
         </Show>
         <main class="min-w-0 flex-1 overflow-y-auto">
-          <Show when={!perf()} fallback={<Perf />}>
+          <Show when={!perf()} fallback={<Perf back={phone() ? () => setSelected(null) : undefined} />}>
           <Show
             when={open()}
             keyed
@@ -139,6 +139,17 @@ function Bench() {
                   <>
                     <Overview data={loaded()} onCancelled={() => void cancelled()} open={setSelected} />
                     <Show when={phone()}>
+                      <section class="mx-auto max-w-5xl px-4 pb-4">
+                        <Button
+                          aria-label="Show the performance trend"
+                          class="h-auto p-0 font-mono text-[11.5px] font-normal text-muted-foreground hover:text-foreground"
+                          onClick={() => setSelected(PERF)}
+                          size={null}
+                          variant={null}
+                        >
+                          perf trend →
+                        </Button>
+                      </section>
                       <section class="mx-auto max-w-5xl px-4 pb-6">
                         <h2 class="section-label mb-2">runs</h2>
                         <div class="-mx-3">
