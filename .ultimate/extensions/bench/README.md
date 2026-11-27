@@ -11,6 +11,11 @@ Bench, in the switcher, with the agent docked (a phone shows it from the title b
 - A run: its verdict and, when it failed, where it stood; tabs for the scorecard (acceptance, coordinators, questions
   asked, usage per model, models by role, pins), the simulated user (its decisions with Ultimate's lines between them,
   improvised ones marked), transcripts (one conversation at a time, tool calls folded), screenshots and test output.
+- Perf (below Overview; a link on a phone): the `pnpm eval perf` trend. There is one small chart per headline metric, showing
+  the median of the repeats with a min–max band and labelled y-axis. Each column is one batch × Ultimate commit. Eval versions
+  (identical measuring code, see `src/perf/trend.ts`) sit side by side and are never joined by a line. A metric where every
+  pass failed is an amber ×, never a zero. Picking a point shows its passes in full: machine load, every measurement per
+  repeat, the 16-marker streaming lag curve, every switch (local records only) and the rest folded.
 - `live` is read with `useAction`'s `every`, 3 s while Bench is on screen in a visible tab: the server runs it once for
   every page and pushes only changes. A run leaving it reloads the overview (`on` the live run ids).
 - The status line shows `Eval · run 2/4 · running` while a run is in progress (from `status`, every 10 s while the tab
@@ -35,6 +40,10 @@ All read `runs/` only, except `cancel`.
 - `transcript {id, conversation, before?}`: up to 200 entries of one conversation, compact; an entry without a message
   (the lander's steps) carries its `data` as cut JSON.
 - `screenshot {id, name}`: a PNG as a data URL.
+- `perf {metrics}`: the trend from `src/perf/trend.ts` `perfTrend` over `results/perf/*.json` and `runs/perf-*.json`
+  (a local record wins over its export). `metrics` are the charted paths, present on every point so a never-measured one
+  still counts its failures.
+- `perfPoint {batch, commit}`: one batch's passes on one commit, with errors and, for local records, every switch.
 - `status` (for other instances and agents): the runs in progress, compact, from `src/live.ts` `status()`:
   `{ runs: [{ id, scenario, commit, phase, repeat: { index, total }, plan?: { index, total }, startedAt, updatedAt }] }`,
   newest first, at most 10. Only unfinished runs whose live.json names a live runner; it reads nothing but those
