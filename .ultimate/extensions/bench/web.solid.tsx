@@ -24,6 +24,7 @@ import {
 } from '@/sdk/solid'
 import { Detail } from './detail.solid.tsx'
 import { Overview } from './overview.solid.tsx'
+import { Perf } from './perf.solid.tsx'
 import { Dot, Note } from './parts.solid.tsx'
 import { LiveAction, OverviewAction, StatusAction, mins, short, toneOf, toneText, usd, verdict, when } from './types.ts'
 import type { Summary } from './types.ts'
@@ -53,7 +54,9 @@ function Bench() {
   })
   const runs = () => data()?.runs ?? []
   const inProgress = () => data()?.live.length ?? 0
+  // A run id, `perf` for the performance trend, or null for the overview.
   const [selected, setSelected] = useExtensionUiState<string | null>('run', null)
+  const perf = () => selected() === PERF
   // A run that is gone (or not loaded yet) shows the overview; the stored choice stays for when it comes back.
   const open = () => {
     const id = selected()
@@ -79,9 +82,9 @@ function Bench() {
         <Show when={!phone()}>
           <nav aria-label="Bench runs" class="w-56 shrink-0 overflow-y-auto border-r border-border/70 bg-sidebar py-1">
             <Button
-              aria-current={open() === null ? 'page' : undefined}
+              aria-current={open() === null && !perf() ? 'page' : undefined}
               aria-label="Show the overview"
-              class={cn(rowClass, 'justify-start gap-2 text-[13px]', open() === null && 'bg-accent')}
+              class={cn(rowClass, 'justify-start gap-2 text-[13px]', open() === null && !perf() && 'bg-accent')}
               onClick={() => setSelected(null)}
               size={null}
               variant={null}
@@ -93,6 +96,16 @@ function Bench() {
                   {inProgress() > 1 ? `${inProgress()} live` : 'live'}
                 </span>
               </Show>
+            </Button>
+            <Button
+              aria-current={perf() ? 'page' : undefined}
+              aria-label="Show the performance trend"
+              class={cn(rowClass, 'justify-start gap-2 text-[13px]', perf() && 'bg-accent')}
+              onClick={() => setSelected(PERF)}
+              size={null}
+              variant={null}
+            >
+              Perf
             </Button>
             <div class="mt-2 px-3 pb-1 section-label">runs</div>
             <Switch>
@@ -109,6 +122,7 @@ function Bench() {
           </nav>
         </Show>
         <main class="min-w-0 flex-1 overflow-y-auto">
+          <Show when={!perf()} fallback={<Perf />}>
           <Show
             when={open()}
             keyed
@@ -141,6 +155,7 @@ function Bench() {
           >
             {(id) => <Detail back={() => setSelected(null)} id={id} />}
           </Show>
+          </Show>
         </main>
         {/* A phone has no room beside the runs: the agent is a tap away in the title bar there. */}
         <Show when={!phone()}>
@@ -153,6 +168,9 @@ function Bench() {
     </>
   )
 }
+
+/** The stored selection that shows Perf; never a run id. */
+const PERF = 'perf'
 
 const rowClass = 'w-full px-3 py-1.5 text-left font-normal hover:bg-accent/60 focus-visible:bg-accent/60'
 

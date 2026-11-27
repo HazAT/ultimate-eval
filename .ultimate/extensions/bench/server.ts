@@ -31,6 +31,9 @@ const groups = async (ctx: Ctx, runs: RunResult[]) => {
   return report.groups(runs)
 }
 
+const perfTrend = async (ctx: Ctx) =>
+  (await import(pathToFileURL(join(ctx.host.projectRoot, 'src/perf/trend.ts')).href)) as typeof import('../../../src/perf/trend.ts')
+
 const runsDir = (ctx: Ctx) => join(ctx.host.projectRoot, 'runs')
 /** No file larger than this is read: what run.ts writes stays far below it (transcripts are well under 1 MB). */
 const MAX_FILE = 16 * 1024 * 1024
@@ -250,6 +253,22 @@ export const actions = {
       }
     })
     return { total: entries.length, start, entries: page }
+  },
+
+  /**
+   * The performance trend from src/perf/trend.ts: every batch in results/perf/ and runs/perf-*.json, one point per
+   * batch × Ultimate commit with each metric's median, min, max and failures, grouped into eval versions (the same
+   * measuring code).
+   */
+  async perf(_args: unknown, ctx: Ctx) {
+    return (await perfTrend(ctx)).perfTrend(ctx.host.projectRoot)
+  },
+
+  /** One point of the trend in full: its batch's meta and every pass on that commit, with switches and errors. */
+  async perfPoint(args: unknown, ctx: Ctx) {
+    const batch = fileName(arg(args, 'batch'), /^[a-zA-Z0-9-]+$/, 'a batch name')
+    const commit = fileName(arg(args, 'commit'), /^[0-9a-f]{40}$/, 'a commit')
+    return (await perfTrend(ctx)).perfPoint(ctx.host.projectRoot, batch, commit)
   },
 
   /** A screenshot as a data URL. */

@@ -1,5 +1,6 @@
 // bench's browser types: the server actions as typed refs, the shapes they return, and small formatters.
 import { actionRef } from '@/sdk/solid'
+import type { TrendBatch, TrendPass, TrendVersion } from '../../../src/perf/trend.ts'
 
 export type Said = { at: number; who: 'you' | 'ultimate'; text: string }
 
@@ -200,6 +201,12 @@ export type Status = {
   }[]
 }
 
+/** The perf trend and one point in full, as src/perf/trend.ts makes them. */
+export type { Stat, TrendPass, TrendPoint, TrendVersion } from '../../../src/perf/trend.ts'
+export type PerfPoint = Omit<TrendBatch, 'passes'> & { passes: TrendPass[] }
+
+export const PerfAction = actionRef<null, TrendVersion[]>('bench', 'perf')
+export const PerfPointAction = actionRef<{ batch: string; commit: string }, PerfPoint>('bench', 'perfPoint')
 export const OverviewAction = actionRef<null, Overview>('bench', 'overview')
 export const StatusAction = actionRef<null, Status>('bench', 'status')
 export const LiveAction = actionRef<null, InProgress[]>('bench', 'live')
