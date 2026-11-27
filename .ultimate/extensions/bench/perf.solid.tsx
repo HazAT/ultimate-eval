@@ -190,10 +190,43 @@ const W = 300
 const H = 84
 const PAD = 10
 
+/** Round ticks from 0 to at least `max`, three or four of them: 0, 500, 1000, 1500. */
+function ticks(max: number) {
+  const raw = Math.max(max, 1e-9) / 3
+  const power = 10 ** Math.floor(Math.log10(raw))
+  const step = ([1, 2, 2.5, 5, 10].find((m) => m * power >= raw) ?? 10) * power
+  return Array.from({ length: Math.ceil(max / step - 1e-9) + 1 }, (_, i) => i * step)
+}
+
+/** The labels of `ticks` beside a chart, at the heights `y` puts them. */
+function YAxis(props: { ticks: number[]; y: (v: number) => number; label: (v: number) => string }) {
+  return (
+    <div class="relative h-[84px] font-mono text-[10px] text-muted-foreground/60 tabular-nums">
+      <For each={props.ticks}>
+        {(v) => (
+          <span class="absolute right-1.5 -translate-y-1/2 whitespace-nowrap" style={{ top: `${(props.y(v) / H) * 100}%` }}>
+            {props.label(v)}
+          </span>
+        )}
+      </For>
+    </div>
+  )
+}
+
+/** Faint lines at each tick but 0, which the axis draws. */
+function Grid(props: { ticks: number[]; y: (v: number) => number }) {
+  return (
+    <For each={props.ticks.slice(1)}>
+      {(v) => <line class="stroke-border/50" vector-effect="non-scaling-stroke" x1="0" x2={W} y1={props.y(v)} y2={props.y(v)} />}
+    </For>
+  )
+}
+
 /** One metric across every column: band and median per run of measured points in one version, × where none were. */
 function Chart(props: { metric: string; label: string; columns: Column[]; selected: Column | undefined; select: (id: string) => void }) {
   const stats = createMemo(() => props.columns.map((c) => c.point.metrics[props.metric]))
-  const top = createMemo(() => Math.max(0, ...stats().map((s) => s?.max ?? 0)) * 1.1 || 1)
+  const scale = createMemo(() => ticks(Math.max(0, ...stats().map((s) => s?.max ?? 0))))
+  const top = () => scale().at(-1)! || 1
   const x = (i: number) => (props.columns.length === 1 ? W / 2 : PAD + (i * (W - 2 * PAD)) / (props.columns.length - 1))
   const y = (v: number) => H - 4 - ((H - 12) * v) / top()
   /** Runs of consecutive measured columns within one version: what one line and one band may span. */
@@ -235,14 +268,17 @@ function Chart(props: { metric: string; label: string; columns: Column[]; select
           <StatText metric={props.metric} stat={at()?.stat} />
         </span>
       </div>
+      <div class="mt-1 grid grid-cols-[3.25rem_minmax(0,1fr)]">
+      <YAxis label={(v) => fmt(props.metric, v)} ticks={scale()} y={y} />
       {/* The column buttons above are the named way to pick a point; a click here is the same, by position. */}
       <svg
         aria-hidden="true"
-        class="mt-1 block h-[84px] w-full overflow-visible"
+        class="block h-[84px] w-full overflow-visible"
         onClick={pick}
         preserveAspectRatio="none"
         viewBox={`0 0 ${W} ${H}`}
       >
+        <Grid ticks={scale()} y={y} />
         <line class="stroke-border" vector-effect="non-scaling-stroke" x1="0" x2={W} y1={H - 4} y2={H - 4} />
         <For each={props.columns}>
           {(c, i) => (
@@ -332,6 +368,7 @@ function Chart(props: { metric: string; label: string; columns: Column[]; select
           }}
         </For>
       </svg>
+      <span />
       <div class="relative mt-0.5 h-3.5 font-mono text-[10px] text-muted-foreground/60">
         <For each={props.columns}>
           {(c, i) => (
@@ -347,6 +384,7 @@ function Chart(props: { metric: string; label: string; columns: Column[]; select
             </Show>
           )}
         </For>
+      </div>
       </div>
     </Box>
   )
@@ -546,7 +584,8 @@ const LINES = Array.from({ length: 16 }, (_, i) => (i + 1) * 100)
 /** The 16 streaming markers: how far behind the model each became visible, one line per pass. */
 function StreamCurve(props: { passes: TrendPass[] }) {
   const lag = (p: TrendPass, line: number) => p.metrics[`streaming.line${line}.lagMs`] ?? null
-  const top = createMemo(() => Math.max(1, ...props.passes.flatMap((p) => LINES.map((l) => lag(p, l) ?? 0))) * 1.1)
+  const scale = createMemo(() => ticks(Math.max(1, ...props.passes.flatMap((p) => LINES.map((l) => lag(p, l) ?? 0)))))
+  const top = () => scale().at(-1)!
   const x = (i: number) => PAD + (i * (W - 2 * PAD)) / (LINES.length - 1)
   const y = (v: number) => H - 4 - ((H - 12) * v) / top()
   const tones = ['stroke-brand', 'stroke-foreground/60', 'stroke-muted-foreground/60', 'stroke-warning/70']
@@ -565,11 +604,12 @@ function StreamCurve(props: { passes: TrendPass[] }) {
               </span>
             )}
           </For>
-          <span>top {fmt('ms', top() / 1.1)}</span>
         </span>
       </div>
-      <Box class="px-3 py-2">
+      <Box class="grid grid-cols-[3.25rem_minmax(0,1fr)] px-3 py-2">
+        <YAxis label={(v) => fmt('ms', v)} ticks={scale()} y={y} />
         <svg aria-hidden="true" class="block h-[84px] w-full overflow-visible" preserveAspectRatio="none" viewBox={`0 0 ${W} ${H}`}>
+          <Grid ticks={scale()} y={y} />
           <line class="stroke-border" vector-effect="non-scaling-stroke" x1="0" x2={W} y1={H - 4} y2={H - 4} />
           <For each={props.passes}>
             {(p, i) => (
@@ -582,6 +622,7 @@ function StreamCurve(props: { passes: TrendPass[] }) {
             )}
           </For>
         </svg>
+        <span />
         <div class="relative mt-0.5 h-3.5 font-mono text-[10px] text-muted-foreground/60">
           <For each={[0, 3, 7, 11, 15]}>
             {(j) => (
