@@ -61,6 +61,7 @@ const REPORTING = new Set(['cli.ts', 'export.ts', 'measure-once.ts', 'report.ts'
 
 /** The measuring code at an eval commit: its src/perf/ files (but the reporting ones), package.json and the lockfile. */
 export function measuringCode(root: string, evalCommit: string) {
+  pinned(evalCommit)
   const tree = execFileSync('git', ['ls-tree', '-r', evalCommit, '--', 'src/perf/', 'package.json', 'pnpm-lock.yaml'], {
     cwd: root, encoding: 'utf8',
   })
@@ -69,6 +70,18 @@ export function measuringCode(root: string, evalCommit: string) {
     return path && !(path.startsWith('src/perf/') && REPORTING.has(path.slice('src/perf/'.length)))
   })
   return createHash('sha256').update(kept.join('\n')).digest('hex').slice(0, 16)
+}
+
+/** A commit pin from a record, checked before it reaches git as an argument. */
+const pinned = (sha: string) => {
+  if (!/^[0-9a-f]{40}$/.test(sha)) throw new Error(`not a commit pin: ${String(sha).slice(0, 50)}`)
+  return sha
+}
+/** A batch whose pins are all commits; any other is skipped. */
+const valid = (batch: TrendBatch) => {
+  pinned(batch.evalCommit)
+  for (const commit of [...batch.commits, ...batch.passes.map((p) => p.commit)]) pinned(commit)
+  return batch
 }
 
 const records = (dir: string, pattern: RegExp) =>
@@ -118,7 +131,9 @@ export function fromExport(name: string, record: Exported): TrendBatch {
       // An export keeps a failed measurement as one null under its path; a null leaf elsewhere is a missing observation.
       const errors = Object.fromEntries(Object.entries(pass.metrics).flatMap(([key, value]) =>
         value === null && MEASUREMENTS.has(key) ? [[key, null]] : []))
-      return { ...pass, metrics: pass.metrics, errors }
+      // publicPerf writes a pass that failed before any sample as empty metrics.
+      const failed = Object.keys(pass.metrics).length === 0
+      return { ...pass, metrics: pass.metrics, errors, ...(failed ? { error: 'the pass failed before any measurement' } : {}) }
     }),
   }
 }
@@ -131,11 +146,11 @@ const MEASUREMENTS = new Set(['firstBuildMs', 'firstLoad.cold', 'firstLoad.warm'
 export function readBatches(root: string): TrendBatch[] {
   const batches = new Map<string, TrendBatch>()
   for (const { name, path } of records(join(root, 'runs'), /^perf-([a-zA-Z0-9-]+)\.json$/)) {
-    try { batches.set(name, fromLocal(name, JSON.parse(readFileSync(path, 'utf8')))) } catch {}
+    try { batches.set(name, valid(fromLocal(name, JSON.parse(readFileSync(path, 'utf8'))))) } catch {}
   }
   for (const { name, path } of records(join(root, 'results', 'perf'), /^([a-zA-Z0-9-]+)\.json$/)) {
     if (batches.has(name)) continue
-    try { batches.set(name, fromExport(name, JSON.parse(readFileSync(path, 'utf8')))) } catch {}
+    try { batches.set(name, valid(fromExport(name, JSON.parse(readFileSync(path, 'utf8'))))) } catch {}
   }
   return [...batches.values()]
 }
@@ -161,7 +176,7 @@ function stat(passes: TrendPass[], key: string): Stat {
  * Versions in order of their first point, each with its points in Ultimate commit date order (then batch start). A
  * dirty harness only matches the same diff, and a small workload never a default one.
  */
-export function trend(batches: TrendBatch[], info: TrendInfo): TrendVersion[] {
+export function trend(batches: TrendBatch[], info: TrendInfo, always: readonly string[] = []): TrendVersion[] {
   const versions = new Map<string, TrendVersion>()
   const passesOf = new Map<TrendPoint, TrendPass[]>()
   for (const batch of batches) {
@@ -184,7 +199,8 @@ export function trend(batches: TrendBatch[], info: TrendInfo): TrendVersion[] {
   }
   // Every point carries every metric of its version, so one that failed or never reached it shows as a gap.
   for (const version of versions.values()) {
-    const keys = new Set(version.points.flatMap((p) => passesOf.get(p)!.flatMap((pass) => Object.keys(pass.metrics))))
+    // `always` (the charted metrics) too, so a version where a measurement never succeeded still shows its failures.
+    const keys = new Set([...always, ...version.points.flatMap((p) => passesOf.get(p)!.flatMap((pass) => Object.keys(pass.metrics)))])
     for (const point of version.points) point.metrics = Object.fromEntries([...keys].map((k) => [k, stat(passesOf.get(point)!, k)]))
   }
   const started = new Map(batches.map((b) => [b.name, b.startedAt ?? '']))
@@ -204,13 +220,13 @@ const once = (key: string, read: () => string | undefined) => {
 }
 
 /** The trend of every batch on disk, versions read from this repository's history and dates from Ultimate's clone. */
-export function perfTrend(root: string, repo = join(homedir(), 'Projects', 'ultimate')) {
+export function perfTrend(root: string, always: readonly string[] = [], repo = join(homedir(), 'Projects', 'ultimate')) {
   return trend(readBatches(root), {
     // An eval commit this clone does not have (yet) is its own version.
     version: (evalCommit) => once(`v:${evalCommit}`, () => measuringCode(root, evalCommit)) ?? evalCommit,
     date: (commit) => once(`d:${commit}`, () =>
-      execFileSync('git', ['show', '-s', '--format=%cI', commit], { cwd: repo, encoding: 'utf8' }).trim() || undefined),
-  })
+      execFileSync('git', ['show', '-s', '--format=%cI', pinned(commit)], { cwd: repo, encoding: 'utf8' }).trim() || undefined),
+  }, always)
 }
 
 /** One batch's passes on one Ultimate commit, in full. */

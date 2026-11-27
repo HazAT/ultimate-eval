@@ -260,8 +260,12 @@ export const actions = {
    * batch × Ultimate commit with each metric's median, min, max and failures, grouped into eval versions (the same
    * measuring code).
    */
-  async perf(_args: unknown, ctx: Ctx) {
-    return (await perfTrend(ctx)).perfTrend(ctx.host.projectRoot)
+  async perf(args: unknown, ctx: Ctx) {
+    // The metrics the surface charts: every point carries them, so one never measured in a version still shows as failed.
+    const metrics = arg(args, 'metrics') ?? []
+    if (!Array.isArray(metrics) || metrics.length > 100 || !metrics.every((m) => typeof m === 'string' && /^[\w.]{1,100}$/.test(m)))
+      throw new Error('Expected metrics: metric paths')
+    return (await perfTrend(ctx)).perfTrend(ctx.host.projectRoot, metrics as string[])
   },
 
   /** One point of the trend in full: its batch's meta and every pass on that commit, with switches and errors. */

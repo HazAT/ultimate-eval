@@ -205,7 +205,7 @@ export type Status = {
 export type { Stat, TrendPass, TrendPoint, TrendVersion } from '../../../src/perf/trend.ts'
 export type PerfPoint = Omit<TrendBatch, 'passes'> & { passes: TrendPass[] }
 
-export const PerfAction = actionRef<null, TrendVersion[]>('bench', 'perf')
+export const PerfAction = actionRef<{ metrics: string[] }, TrendVersion[]>('bench', 'perf')
 export const PerfPointAction = actionRef<{ batch: string; commit: string }, PerfPoint>('bench', 'perfPoint')
 export const OverviewAction = actionRef<null, Overview>('bench', 'overview')
 export const StatusAction = actionRef<null, Status>('bench', 'status')

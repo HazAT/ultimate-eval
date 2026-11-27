@@ -42,22 +42,34 @@ test('the trend keeps eval versions apart, shows a failed metric as a gap, and p
     save('runs/perf-three.json', record(measuring, [pass(b, 1, 90)], [b]))
     // An export of `one` loses to the local record; `four` exists only as an export.
     save('results/perf/one.json', { commits: [a], evalCommit: first, seeds: {}, samples: [] })
+    // A pass that failed before any sample exports as empty metrics; an option-shaped pin never reaches git.
+    save('results/perf/five.json', { commits: [a], evalCommit: first, seeds: {}, samples: [
+      { commit: a, repeat: 1, load1Start: 1, load1End: 1, cpuBusy: null, gate: 'ready', waitedSec: 0, metrics: { 'memory.jsHeapUsedMB': 30 } },
+      { commit: a, repeat: 2, load1Start: 1, load1End: 1, cpuBusy: null, gate: 'ready', waitedSec: 0, metrics: {} },
+    ] })
+    save('results/perf/bad.json', { commits: ['--output=/tmp/x'], evalCommit: first, seeds: {}, samples: [] })
     save('results/perf/four.json', { commits: [a], evalCommit: first, seeds: {}, samples: [{
       commit: a, repeat: 1, load1Start: 1, load1End: 1, cpuBusy: null, gate: 'ready', waitedSec: 0,
       metrics: { 'firstLoad.cold': null, 'firstLoad.warm.coverMs': null, 'memory.jsHeapUsedMB': 30 },
     }] })
 
     const batches = readBatches(root)
-    assert.deepEqual(batches.map((batch) => [batch.name, batch.source]).sort(), [['four', 'export'], ['one', 'local'], ['three', 'local'], ['two', 'local']])
+    assert.deepEqual(batches.map((batch) => [batch.name, batch.source]).sort(),
+      [['five', 'export'], ['four', 'export'], ['one', 'local'], ['three', 'local'], ['two', 'local']])
     assert.deepEqual(batches.find((batch) => batch.name === 'four')!.passes[0]!.errors, { 'firstLoad.cold': null })
 
     const dates: Record<string, string> = { [a]: '2026-10-26', [b]: '2026-11-27' }
+    // `one` alone in a version: its timed-out cold load still shows as failed when the chart asks for it.
+    const alone = trend(batches.filter((batch) => batch.name === 'one'), { version: () => 'v', date: () => undefined }, ['firstLoad.cold.transcriptMs'])
+    assert.deepEqual(alone[0]!.points[0]!.metrics['firstLoad.cold.transcriptMs'], { median: null, min: null, max: null, n: 0, failed: 2 })
+
     const versions = trend(batches, { version: (e) => measuringCode(root, e), date: (c) => dates[c] })
     assert.equal(versions.length, 2)
     const [old, current] = versions
     assert.deepEqual(new Set(old!.evalCommits), new Set([first, reportOnly]))
     assert.deepEqual(current!.evalCommits, [measuring])
-    assert.deepEqual(old!.points.map((p) => [p.batch, p.commit]).sort(), [['four', a], ['one', a], ['two', b]])
+    assert.deepEqual(old!.points.map((p) => [p.batch, p.commit]).sort(), [['five', a], ['four', a], ['one', a], ['two', b]])
+    assert.deepEqual(old!.points.find((p) => p.batch === 'five')!.metrics['memory.jsHeapUsedMB'], { median: 30, min: 30, max: 30, n: 1, failed: 1 })
 
     const one = old!.points.find((p) => p.batch === 'one')!
     // Both passes timed out: no value, two failures, never a zero.

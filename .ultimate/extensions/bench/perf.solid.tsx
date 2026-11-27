@@ -2,10 +2,11 @@
 // Perf: the black-box performance trend from `pnpm eval perf`. One small chart per headline metric (median of the
 // repeats with a min–max band), every batch × Ultimate commit a column, eval versions side by side and never joined;
 // a column opens that point's passes in full.
-import { ArrowLeft } from '@lucide/solid'
+import { ArrowLeft, ChevronRight } from '@lucide/solid'
 import type { JSX } from '@solidjs/web'
 import { For, Match, Show, Switch, createMemo } from 'solid-js'
 import { Button } from '@/components/ui/button.solid.tsx'
+import { Collapsible, CollapsibleContent, CollapsibleTrigger } from '@/components/ui/collapsible.solid.tsx'
 import { cn, errorMessage, formatBytes, useAction, useExtensionUiState } from '@/sdk/solid'
 import { Box, Note, Section } from './parts.solid.tsx'
 import { PerfAction, PerfPointAction, short } from './types.ts'
@@ -29,6 +30,8 @@ const HEADLINE: { group: string; metrics: [key: string, label: string][] }[] = [
   ] },
 ]
 
+const CHARTED = HEADLINE.flatMap((g) => g.metrics.map(([key]) => key))
+
 /** A column of the charts: one point, and where its version starts. */
 type Column = { point: TrendPoint; version: TrendVersion; versionIndex: number; first: boolean }
 const columnId = (p: TrendPoint) => `${p.batch}:${p.commit}`
@@ -50,7 +53,7 @@ export function fmt(key: string, value: number | null | undefined) {
 
 /** `back` is given on a phone, which has no run column to leave by. */
 export function Perf(props: { back?: () => void }) {
-  const trend = useAction(PerfAction, null, { focus: true })
+  const trend = useAction(PerfAction, { metrics: CHARTED }, { focus: true })
   return (
     <div class="mx-auto max-w-5xl px-4 py-5 @container md:px-6">
       <Show when={props.back}>
@@ -156,7 +159,7 @@ function Points(props: { columns: Column[]; selected: Column | undefined; select
                   return (
                     <Button
                       aria-current={on() ? 'true' : undefined}
-                      aria-label={`Show perf point ${short(c.point.commit)} from ${c.point.batch}`}
+                      aria-label={`Show perf point ${props.columns.indexOf(c) + 1}: ${short(c.point.commit)} from ${c.point.batch}`}
                       class={cn(
                         'h-auto flex-col items-start gap-0 rounded-md border border-border/70 px-2 py-1 font-mono text-[11px] font-normal text-muted-foreground hover:bg-accent/60 hover:text-foreground',
                         on() && 'border-foreground/30 bg-accent text-foreground',
@@ -302,7 +305,7 @@ function Chart(props: { metric: string; label: string; columns: Column[]; select
               <Show
                 when={s()?.median != null}
                 fallback={
-                  <Show when={s()}>
+                  <Show when={s() && s()!.failed > 0 && s()!.failed === c.point.n}>
                     <g class="stroke-warning" stroke-width="1.5">
                       <title>{`${short(c.point.commit)}: no value, ${s()!.failed} of ${c.point.n} failed`}</title>
                       <line vector-effect="non-scaling-stroke" x1={x(i()) - 3} x2={x(i()) + 3} y1={H - 10} y2={H - 4} />
@@ -430,20 +433,25 @@ const failure = (pass: TrendPass, key: string) => {
   const path = Object.keys(pass.errors).find((p) => key === p || key.startsWith(`${p}.`))
   return path === undefined ? undefined : (pass.errors[path] ?? `${path} failed`)
 }
-const meta = (pass: TrendPass, key: string): number | null | undefined =>
-  key in pass.metrics ? pass.metrics[key] : (pass as unknown as Record<string, number | null>)[key]
+/** The pass's own readings (machine load), recorded even when its measurements failed. */
+const MACHINE = new Set(['load1Start', 'load1End', 'cpuBusy', 'waitedSec'])
+const value = (pass: TrendPass, key: string): number | null | undefined =>
+  MACHINE.has(key) ? (pass as unknown as Record<string, number | null>)[key] : pass.metrics[key]
+/** What a cell shows in place of a value: the failure that covers it, unless it holds a number anyway. */
+const cellError = (pass: TrendPass, key: string) =>
+  MACHINE.has(key) || typeof pass.metrics[key] === 'number' ? undefined : failure(pass, key)
 
 function Passes(props: { point: PerfPoint }) {
   const passes = () => props.point.passes.toSorted((a, b) => a.repeat - b.repeat)
   const cols = () => `12rem repeat(${passes().length}, 5.5rem)`
   return (
     <div class="space-y-5">
-      <div class="grid gap-x-8 gap-y-5 @3xl:grid-cols-2">
+      <div class="grid gap-x-8 gap-y-5 @5xl:grid-cols-2">
         <For each={ROWS}>
           {(block) => (
-            <div class="min-w-0">
+            <div class="min-w-0 overflow-x-auto">
               <p class="section-label mb-1">{block.title}</p>
-              <div class="grid gap-x-3 gap-y-[3px] font-mono text-[11.5px] leading-[1.5]" style={{ 'grid-template-columns': cols() }}>
+              <div class="grid w-max gap-x-3 gap-y-[3px] font-mono text-[11.5px] leading-[1.5]" style={{ 'grid-template-columns': cols() }}>
                 <span />
                 <For each={passes()}>{(p) => <span class="text-right text-muted-foreground/60">#{p.repeat}</span>}</For>
                 <For each={block.rows}>
@@ -454,8 +462,8 @@ function Passes(props: { point: PerfPoint }) {
                       </span>
                       <For each={passes()}>
                         {(p) => (
-                          <Cell error={key in p.metrics || !failure(p, key) ? undefined : failure(p, key)}>
-                            {fmt(key, meta(p, key))}
+                          <Cell error={cellError(p, key)}>
+                            {fmt(key, value(p, key))}
                             <Show when={key === 'waitedSec' && p.gate === 'timeout'}>
                               <span class="text-warning"> gate timed out</span>
                             </Show>
@@ -474,7 +482,51 @@ function Passes(props: { point: PerfPoint }) {
       <Show when={passes().some((p) => p.switches)}>
         <Switches passes={passes()} />
       </Show>
+      <Rest cols={cols()} passes={passes()} />
     </div>
+  )
+}
+
+const SHOWN = new Set(ROWS.flatMap((b) => b.rows.map(([key]) => key)))
+
+/** Every other recorded metric (the stream's per-line marks are in its curve), folded away. */
+function Rest(props: { passes: TrendPass[]; cols: string }) {
+  const keys = createMemo(() =>
+    // A failed measurement's own path is left out when the rows above already show it failed.
+    [...new Set(props.passes.flatMap((p) => [...Object.keys(p.metrics), ...Object.keys(p.errors)]))]
+      .filter((key) => !SHOWN.has(key) && !key.startsWith('streaming.line') && ![...SHOWN].some((s) => s.startsWith(`${key}.`)))
+      .toSorted(),
+  )
+  return (
+    <Show when={keys().length > 0}>
+      <Collapsible aria-label="Every other metric of this point">
+        <CollapsibleTrigger class="group/rest flex items-center gap-1 font-mono text-[11px] text-muted-foreground outline-none hover:text-foreground focus-visible:ring-1 focus-visible:ring-ring">
+          <ChevronRight aria-hidden="true" class="size-3 transition-transform group-data-open/rest:rotate-90" />
+          {keys().length} more recorded {keys().length === 1 ? 'metric' : 'metrics'}
+        </CollapsibleTrigger>
+        <CollapsibleContent class="mt-2 overflow-x-auto">
+          <div
+            class="grid w-max gap-x-3 gap-y-[3px] font-mono text-[11.5px] leading-[1.5]"
+            style={{ 'grid-template-columns': props.cols.replace('12rem', '22rem') }}
+          >
+            <span />
+            <For each={props.passes}>{(p) => <span class="text-right text-muted-foreground/60">#{p.repeat}</span>}</For>
+            <For each={keys()}>
+              {(key) => (
+                <>
+                  <span class="truncate text-muted-foreground/70" title={key}>
+                    {key}
+                  </span>
+                  <For each={props.passes}>
+                    {(p) => <Cell error={cellError(p, key)}>{fmt(key, value(p, key))}</Cell>}
+                  </For>
+                </>
+              )}
+            </For>
+          </div>
+        </CollapsibleContent>
+      </Collapsible>
+    </Show>
   )
 }
 
