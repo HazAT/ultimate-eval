@@ -1,9 +1,9 @@
 /** One scratch Ultimate per commit; snapshot once, then restore before each measured repeat. */
 import { execFileSync } from 'node:child_process'
 import type { ChildProcess } from 'node:child_process'
-import { cpSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
+import { cpSync, mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from 'node:fs'
 import { homedir, tmpdir } from 'node:os'
-import { dirname, join } from 'node:path'
+import { basename, delimiter, dirname, join } from 'node:path'
 import { cloneUltimate, initRepo, resolveCommit, startInstance, stopGroup } from '../run.ts'
 import { startFake } from './fake.ts'
 import type { FakeOptions } from './fake.ts'
@@ -53,12 +53,25 @@ export async function perfInstance(commit: string, options: {
 
   try {
     signal?.throwIfAborted()
-    const clone = cloneUltimate(repo, sha, tmp, log)
+    mkdirSync(settings, { recursive: true })
+    // Resolve the installed pnpm before swapping HOME: the host's mise shim uses the real user's configuration.
+    const executable = (command: string, args: string[]) => execFileSync(command, args, { encoding: 'utf8' }).trim()
+    const pnpm = executable('which', ['pnpm'])
+    const pnpmDir = dirname(basename(realpathSync(pnpm)) === 'mise' ? executable('mise', ['which', 'pnpm']) : pnpm)
+    const env = {
+      PATH: [pnpmDir, dirname(process.execPath), process.env.PATH].join(delimiter),
+      HOME: userHome,
+      // Reuse package contents, not the user's pnpm configuration or registry credentials.
+      npm_config_store_dir: join(process.env.XDG_DATA_HOME ?? join(homedir(), '.local', 'share'), 'pnpm', 'store'),
+      TAILSCALE_COMMAND: '/nonexistent',
+    }
+    const installing = performance.now()
+    const clone = cloneUltimate(repo, sha, tmp, log, env)
+    log(`clone and install: ${((performance.now() - installing) / 1000).toFixed(1)} s`)
     const fixture = join(tmp, 'fixture')
     mkdirSync(fixture)
     writeFileSync(join(fixture, 'fixture.txt'), 'A stable tool result for the performance benchmark.\n')
     initRepo(fixture, project, 'Performance fixture')
-    mkdirSync(settings, { recursive: true })
     const json = (name: string, value: unknown) => writeFileSync(join(settings, name), JSON.stringify(value))
     json('settings.json', { onboarding: false, extensions: { disable: ['update', 'claude-code'] } })
     json('model-families.json', { recent: { families: Object.fromEntries(
@@ -66,18 +79,12 @@ export async function perfInstance(commit: string, options: {
     ) } })
     json('trust.json', { [project]: true })
     fake = await startFake(options.fake ?? { chunkMs: 0, answer: seedAnswer })
-    // Do not inherit provider keys, credential-store variables, or the real HOME.
-    const env = {
-      PATH: process.env.PATH,
-      HOME: userHome,
-      PI_CODING_AGENT_DIR: fake.agentDir,
-      TAILSCALE_COMMAND: '/nonexistent',
-    }
+    const serverEnv = { ...env, PI_CODING_AGENT_DIR: fake.agentDir }
     const start = async () => {
       if (stopped) throw new Error('performance instance is stopped')
       signal?.throwIfAborted()
       const started = await startInstance({
-        clone, root: project, home, userHome, groups, port, env, log, cancelled: () => !!signal?.aborted,
+        clone, root: project, home, userHome, groups, port, env: serverEnv, log, cancelled: () => !!signal?.aborted,
       })
       port = Number(new URL(started.base).port)
       return started.base
@@ -86,7 +93,7 @@ export async function perfInstance(commit: string, options: {
     const seedPath = join(dirname(home), 'seed.json')
     const copy = (from: string, to: string) => execFileSync('cp', ['-a', from, to], { cwd: tmp })
     return {
-      base, home, userHome, fake, halt,
+      base, home, userHome, env, fake, halt,
       async restart() {
         await halt()
         await start()

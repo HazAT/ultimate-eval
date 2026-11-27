@@ -10,6 +10,10 @@ const pin = (value: string) => {
   if (typeof value !== 'string' || !/^[0-9a-f]{40}$/.test(value)) throw new Error('export refused: invalid commit pin')
   return value
 }
+const digest = (value: string) => {
+  if (typeof value !== 'string' || !/^[0-9a-f]{64}$/.test(value)) throw new Error('export refused: invalid harness diff digest')
+  return value
+}
 const number = (value: number) => {
   if (!Number.isFinite(value)) throw new Error('export refused: invalid numeric field')
   return value
@@ -21,6 +25,7 @@ export function publicPerf(record: PerfRecord) {
   return {
     commits,
     evalCommit: pin(record.evalCommit),
+    ...(record.evalDiff === undefined ? {} : { evalDiff: digest(record.evalDiff) }),
     seeds: Object.fromEntries(commits.flatMap((commit) => {
       const seed = record.seeds[commit]
       return !seed || 'error' in seed ? [] : [[commit, {
@@ -43,9 +48,10 @@ export function publicPerf(record: PerfRecord) {
 export function exportPerf(name: string, record: PerfRecord, out = join(ROOT, 'results', 'perf')) {
   perfRecordPath(name) // Validate the label before deriving an output filename.
   const text = JSON.stringify(publicPerf(record), null, 2) + '\n'
-  const hits = scan(text)
+  const file = `${name}.json`
+  const hits = [...new Set([...scan(file), ...scan(text)])]
   if (hits.length) throw new Error(`export refused, forbidden content: ${hits.join(', ')}`)
   mkdirSync(out, { recursive: true })
-  writeFileSync(join(out, `${name}.json`), text)
-  return `results/perf/${name}.json`
+  writeFileSync(join(out, file), text)
+  return `results/perf/${file}`
 }

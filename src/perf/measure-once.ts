@@ -11,6 +11,7 @@ if (!commit || (size !== undefined && size !== '--small')) {
   const onSignal = (name: NodeJS.Signals) => cancel.abort(new Error(`${name}: measurement cancelled`))
   process.on('SIGINT', onSignal)
   process.on('SIGTERM', onSignal)
+  process.on('SIGHUP', onSignal)
   const options = { signal: cancel.signal, log: (line: string) => console.error(`${commit}: ${line}`) }
   let instance: Awaited<ReturnType<typeof perfInstance>> | undefined
   try {
@@ -25,5 +26,6 @@ if (!commit || (size !== undefined && size !== '--small')) {
     await instance?.stop()
     process.off('SIGINT', onSignal)
     process.off('SIGTERM', onSignal)
+    process.off('SIGHUP', onSignal)
   }
 }

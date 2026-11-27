@@ -11,7 +11,7 @@ export async function perfCli(args: string[]) {
     args,
     options: {
       commit: { type: 'string', multiple: true }, repeat: { type: 'string', default: '3' },
-      name: { type: 'string' }, small: { type: 'boolean', default: false },
+      name: { type: 'string' }, small: { type: 'boolean', default: false }, dirty: { type: 'boolean' },
       foreground: { type: 'boolean' }, unit: { type: 'string' },
       status: { type: 'string' }, report: { type: 'boolean' }, export: { type: 'string' },
     },
@@ -33,7 +33,7 @@ export async function perfCli(args: string[]) {
     const repeat = Number(values.repeat)
     if (!Number.isSafeInteger(repeat) || repeat < 1) throw new Error('--repeat must be a positive integer')
     if (!values.commit?.length) throw new Error('perf needs at least one --commit')
-    const batch = resolvePerf({ commits: values.commit, repeat, name: values.name, small: values.small })
+    const batch = resolvePerf({ commits: values.commit, repeat, name: values.name, small: values.small, dirty: values.dirty })
     if (values.foreground) {
       const record = await runPerf({ ...batch, ...(values.unit ? { unit: values.unit } : {}) })
       if (record.error) process.exitCode = 1

@@ -1,5 +1,6 @@
 import { execFileSync } from 'node:child_process'
-import { existsSync, linkSync, mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs'
+import { createHash } from 'node:crypto'
+import { existsSync, linkSync, lstatSync, mkdirSync, readFileSync, readlinkSync, renameSync, rmSync, writeFileSync } from 'node:fs'
 import { homedir } from 'node:os'
 import { dirname, join, relative } from 'node:path'
 import { batchName, errorText } from '../ab.ts'
@@ -18,7 +19,28 @@ export const perfRecordPath = (name: string) => {
   return join(runs, `perf-${name}.json`)
 }
 
-type Options = { name: string; commits: string[]; repeat: number; small: boolean }
+type Options = { name: string; commits: string[]; repeat: number; small: boolean; dirty?: boolean }
+const git = (cwd: string, ...args: string[]) => execFileSync('git', args, { cwd, encoding: 'utf8' }).trim()
+
+export function perfPin(allowDirty = false, cwd = ROOT): { evalCommit: string; evalDiff?: string } {
+  const evalCommit = git(cwd, 'rev-parse', 'HEAD')
+  const paths = ['--', 'src/', 'package.json', 'pnpm-lock.yaml']
+  const status = git(cwd, 'status', '--porcelain', '--untracked-files=all', ...paths)
+  if (!status) return { evalCommit }
+  if (!allowDirty) throw new Error('performance harness is dirty (src/, package.json or pnpm-lock.yaml); commit changes or pass --dirty')
+  const hash = createHash('sha256').update(status).update('\0')
+  const diff = (...args: string[]) => execFileSync('git', ['diff', '--binary', '--no-ext-diff', ...args, ...paths], { cwd })
+  hash.update(diff('--cached')).update('\0').update(diff())
+  // Git diff omits untracked files; include both their identity and contents in the pin.
+  const untracked = execFileSync('git', ['ls-files', '--others', '--exclude-standard', '-z', ...paths], { cwd, encoding: 'utf8' })
+  for (const file of untracked.split('\0').filter(Boolean)) {
+    const path = join(cwd, file)
+    const stat = lstatSync(path)
+    const bytes = stat.isSymbolicLink() ? Buffer.from(readlinkSync(path)) : readFileSync(path)
+    hash.update(`\0${file}\0${stat.mode}\0${bytes.length}\0`).update(bytes)
+  }
+  return { evalCommit, evalDiff: hash.digest('hex') }
+}
 export type SeedInfo = { sidebar: number; turns: number; entryCounts: number[]; toolCounts: number[]; seconds: number }
 export type PerfPass = {
   commit: string; repeat: number; at: string; seconds: number
@@ -26,6 +48,7 @@ export type PerfPass = {
 } & ({ sample: Sample; error?: never } | { sample: null; error: string })
 export type PerfRecord = Options & {
   evalCommit: string
+  evalDiff?: string
   dates: Record<string, string>
   unit?: string
   pid: number
@@ -47,6 +70,7 @@ export function resolvePerf(options: Omit<Options, 'name'> & { name?: string }):
 }
 
 export function launchPerf(options: Options) {
+  perfPin(options.dirty)
   const { name } = options
   const unit = unitOf(name)
   const path = perfRecordPath(name)
@@ -58,7 +82,7 @@ export function launchPerf(options: Options) {
     `--setenv=PATH=${process.env.PATH}`, `--setenv=HOME=${process.env.HOME}`,
     `--property=StandardOutput=append:${log}`, `--property=StandardError=append:${log}`,
     process.execPath, 'src/cli.ts', 'perf', '--foreground', '--unit', unit, '--name', name,
-    '--repeat', String(options.repeat), ...(options.small ? ['--small'] : []),
+    '--repeat', String(options.repeat), ...(options.small ? ['--small'] : []), ...(options.dirty ? ['--dirty'] : []),
     ...options.commits.flatMap((commit) => ['--commit', commit]),
   ], { stdio: 'inherit' })
   return { unit, record: relative(ROOT, path), log: relative(ROOT, log) }
@@ -67,10 +91,9 @@ export function launchPerf(options: Options) {
 export async function runPerf(options: Options & { unit?: string }) {
   const { name } = options
   const path = perfRecordPath(name)
-  const git = (cwd: string, ...args: string[]) => execFileSync('git', args, { cwd, encoding: 'utf8' }).trim()
   const record: PerfRecord = {
     ...options,
-    evalCommit: git(ROOT, 'rev-parse', 'HEAD'),
+    ...perfPin(options.dirty),
     dates: Object.fromEntries(options.commits.map((commit) => [commit, git(repo, 'show', '-s', '--format=%cs', commit)])),
     pid: process.pid, startedAt: new Date().toISOString(), seeds: {}, samples: [], complete: false,
   }
@@ -90,6 +113,7 @@ export async function runPerf(options: Options & { unit?: string }) {
   const onSignal = (name: NodeJS.Signals) => cancel.abort(new Error(`${name}: performance batch cancelled`))
   process.on('SIGINT', onSignal)
   process.on('SIGTERM', onSignal)
+  process.on('SIGHUP', onSignal)
   const detail = (error: unknown) => errorText(error instanceof Error ? error.message : String(error))
   const errors: string[] = []
   const size = options.small ? { sidebar: 50, turns: 100 } : { sidebar: 300, turns: 300 }
@@ -146,6 +170,7 @@ export async function runPerf(options: Options & { unit?: string }) {
     }
     process.off('SIGINT', onSignal)
     process.off('SIGTERM', onSignal)
+    process.off('SIGHUP', onSignal)
     if (errors.length) record.error = errors.join('\n')
     record.complete = true
     record.finishedAt = new Date().toISOString()

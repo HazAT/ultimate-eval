@@ -2,7 +2,7 @@ import assert from 'node:assert/strict'
 import { readFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import test from 'node:test'
-import { shortAnswer, startFake } from '../src/perf/fake.ts'
+import { shortAnswer, shortFirst, shortLast, startFake } from '../src/perf/fake.ts'
 
 test('fake model sends paced OpenAI SSE chunks and records their timing', async () => {
   const fake = await startFake({
@@ -45,10 +45,15 @@ test('fake model sends paced OpenAI SSE chunks and records their timing', async 
     assert.deepEqual(chunks.pop(), { index: 0, delta: {}, finish_reason: 'stop' })
     assert.equal(chunks.length, 40)
     assert.equal(chunks[0].delta.role, 'assistant')
+    assert.equal(chunks[0].delta.content, shortFirst)
+    assert.equal(chunks.at(-1)?.delta.content, shortLast)
     assert.ok(chunks.every((c) => c.finish_reason === null && c.delta.content))
     assert.equal(chunks.map((c) => c.delta.content).join(''), shortAnswer.text)
     assert.equal(fake.requests.length, 1)
-    const { arrivedAt, firstChunkAt, lastChunkAt, lastUserText } = fake.requests[0]!
+    const { arrivedAt, firstChunkAt, lastChunkAt, lastUserText, chunkSentAt } = fake.requests[0]!
+    assert.equal(chunkSentAt.length, 40)
+    assert.equal(chunkSentAt[0], firstChunkAt)
+    assert.equal(chunkSentAt.at(-1), lastChunkAt)
     assert.equal(lastUserText, 'Measure this.')
     assert.ok(arrivedAt >= started)
     assert.ok(firstChunkAt !== undefined && firstChunkAt >= arrivedAt)

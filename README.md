@@ -42,7 +42,7 @@ early). Watch `systemctl --user is-active ue-ab-<label>`, then read the record; 
 ## Performance (`eval perf`)
 
 ```bash
-pnpm eval perf --commit <sha|main> [--commit …] [--repeat N] [--name LABEL] [--small] [--foreground]
+pnpm eval perf --commit <sha|main> [--commit …] [--repeat N] [--name LABEL] [--small] [--foreground] [--dirty]
 pnpm eval perf --status <name>
 pnpm eval perf --report [name…]
 pnpm eval perf --export <name>
@@ -56,8 +56,9 @@ excluding package install and the load gate. Before each pass the gate checks th
 while it's above 4. After 30 min it runs anyway and marks the sample `timeout`.
 
 By default the user unit `ue-perf-<name>` runs the batch, with its log and live record in `runs/`. Reports keep
-harness versions and seed sizes separate. Only an explicit export writes to `results/perf/`; results are pushed
-only with Daniel's approval.
+harness versions and seed sizes separate. Changes under `src/`, `package.json`, or `pnpm-lock.yaml` prevent a
+batch from starting unless `--dirty` is passed; such runs are grouped separately by their diff digest. Only an
+explicit export writes to `results/perf/`; results are pushed only with Daniel's approval.
 
 ## What one run does (`src/run.ts`)
 

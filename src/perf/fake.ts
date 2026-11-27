@@ -8,18 +8,23 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { setTimeout } from 'node:timers/promises'
 
-export type Answer = { text: string; chunks: number; tool?: { name: string; args: unknown } }
+export type Answer = { text: string; chunks: number | string[]; tool?: { name: string; args: unknown } }
 export type FakeOptions = { chunkMs: number; answer: (lastUserText: string) => Answer }
-export type RequestTiming = { arrivedAt: number; lastUserText: string; firstChunkAt?: number; lastChunkAt?: number }
+export type RequestTiming = { arrivedAt: number; lastUserText: string; firstChunkAt?: number; lastChunkAt?: number; chunkSentAt: number[] }
 
-export const shortAnswer: Answer = {
-  text: 'Performance check complete. The reply arrived from the local scripted model.',
-  chunks: 40,
+const split = (text: string, chunks: number) => {
+  const points = Array.from(text)
+  if (!Number.isInteger(chunks) || chunks < 1 || chunks > points.length) throw new Error('invalid fake chunk count')
+  return Array.from({ length: chunks }, (_, i) =>
+    points.slice(Math.floor(i * points.length / chunks), Math.floor((i + 1) * points.length / chunks)).join(''))
 }
-export const longAnswer = (chunks = 1600): Answer => ({
-  text: Array.from({ length: chunks }, (_, i) => `This is benchmark line ${i + 1}.\n`).join(''),
-  chunks,
-})
+const answerFrom = (chunks: string[]) => ({ text: chunks.join(''), chunks })
+export const shortFirst = 'StartPulse'
+export const shortLast = 'EndPulse'
+export const shortAnswer = answerFrom([shortFirst, ...split(' The reply arrived from the local scripted model. ', 38), shortLast])
+export const longLine = (i: number) => `This is benchmark line ${i}.`
+// One chunk per line, so a displayed marker can be compared with the send time of that exact line.
+export const longAnswer = (chunks = 1600): Answer => answerFrom(Array.from({ length: chunks }, (_, i) => `${longLine(i + 1)}\n`))
 
 const textOf = (content: unknown): string =>
   typeof content === 'string' ? content
@@ -48,7 +53,7 @@ export async function startFake({ chunkMs, answer }: FakeOptions) {
       response.writeHead(404).end()
       return
     }
-    const timing: RequestTiming = { arrivedAt: Date.now(), lastUserText: '' }
+    const timing: RequestTiming = { arrivedAt: Date.now(), lastUserText: '', chunkSentAt: [] }
     requests.push(timing)
     const pace = fake.chunkMs
     let body = ''
@@ -59,10 +64,6 @@ export async function startFake({ chunkMs, answer }: FakeOptions) {
     timing.lastUserText = textOf(messages.findLast((message) => message.role === 'user')?.content)
     const { text, chunks, tool } = answer(timing.lastUserText)
     const call = last?.role === 'user' ? tool : undefined
-    const parts = Array.from(text)
-    if (!Number.isInteger(chunks) || chunks < 1 || (!call && chunks > parts.length))
-      throw new Error('fake answer must have between 1 and one chunk per character')
-
     const disconnected = new AbortController()
     response.once('close', () => disconnected.abort())
     response.writeHead(200, { 'Content-Type': 'text/event-stream' })
@@ -70,6 +71,7 @@ export async function startFake({ chunkMs, answer }: FakeOptions) {
       response.write(chunk(delta))
       timing.lastChunkAt = Date.now()
       timing.firstChunkAt ??= timing.lastChunkAt
+      timing.chunkSentAt.push(timing.lastChunkAt)
     }
     if (call) {
       send({ role: 'assistant', tool_calls: [{
@@ -77,12 +79,12 @@ export async function startFake({ chunkMs, answer }: FakeOptions) {
         function: { name: call.name, arguments: JSON.stringify(call.args) },
       }] })
     } else {
+      const parts = typeof chunks === 'number' ? split(text, chunks) : chunks
       const started = performance.now()
-      for (let i = 0; i < chunks; i++) {
+      for (const [i, content] of parts.entries()) {
         const delay = started + i * pace - performance.now()
         if (delay > 0) await setTimeout(delay, undefined, { signal: disconnected.signal })
         if (response.destroyed) return
-        const content = parts.slice(Math.floor(i * parts.length / chunks), Math.floor((i + 1) * parts.length / chunks)).join('')
         send(i === 0 ? { role: 'assistant', content } : { content })
       }
     }

@@ -23,29 +23,35 @@ export function flatten(sample?: Sample | null): Record<string, Scalar> {
 
   add('firstBuildMs', sample?.firstBuildMs)
   for (const mode of ['cold', 'warm'] as const) {
-    fields(`firstLoad.${mode}`, sample?.firstLoad?.[mode], ['dclMs', 'fcpMs', 'transcriptMs', 'transferBytes'])
+    fields(`firstLoad.${mode}`, sample?.firstLoad?.[mode], ['dclMs', 'fcpMs', 'transcriptMs', 'coverMs', 'transferBytes'])
   }
   fields('sendToResponse', sample?.sendToResponse, ['userMs', 'answerMs'])
-  fields('ttft', sample?.ttft, ['serverPrepMs', 'streamToPaintMs', 'totalMs'])
+  fields('ttft', sample?.ttft, ['serverPrepMs', 'streamToPaintMs', 'totalMs', 'lastChunkMs', 'lastChunkToPaintMs'])
   const switches = success(sample?.switch)
   for (const mode of ['cold', 'warm'] as const) {
-    for (const key of ['settledMs', 'longMs'] as const) {
-      const values = switches?.[mode]?.map((entry) => entry[key]) ?? []
+    for (const key of ['visibleMs', 'settledMs', 'longMs'] as const) {
+      // Historical records did not have a visibleMs field. Keep their other metrics reportable under the old pin.
+      const values = switches?.[mode]?.map((entry) => entry[key]).filter((value) => value !== undefined) ?? []
       if (!values.every(Number.isFinite)) throw new Error(`invalid number for switch.${mode}.${key}`)
       add(`switch.${mode}.${key}`, median(values), failed(sample?.switch))
     }
   }
   const streaming = success(sample?.streaming)
+  fields('streaming.progress', streaming?.progress, ['visibleCount', 'firstProgressMs', 'maxGapMs', 'p95GapMs', 'p95LagMs'], failed(sample?.streaming))
+  // Markers have fixed labels and carry only relative times; transcript text and epoch times never enter the export.
+  const progress = new Map(streaming?.progress?.markers.map((mark) => [mark.line, mark]))
+  for (let line = 100; line <= 1600; line += 100) {
+    fields(`streaming.line${line}`, progress.get(line), ['sentMs', 'visibleMs', 'lagMs'], failed(sample?.streaming))
+  }
   fields('streaming.longtask', streaming?.longtask, ['count', 'totalMs', 'p95Ms'], failed(sample?.streaming))
   fields('streaming.longAnimationFrame', streaming?.longAnimationFrame, ['count', 'totalMs'], failed(sample?.streaming))
   add('streaming.rafGapsOver33Ms', streaming?.rafGapsOver33Ms, failed(sample?.streaming))
   fields('memory', sample?.memory, ['jsHeapUsedMB', 'nodes', 'jsEventListeners'])
-  fields('reconnect', sample?.reconnect, ['readyToEventMs', 'outageMs'])
+  fields('reconnect', sample?.reconnect, ['handshakeMs', 'readyToViewMs', 'outageMs'])
   add('reconnect.restartBuildMs', success(sample?.reconnect)?.restartBuildMs, failed(sample?.reconnect))
   const keypress = success(sample?.keypress)
-  add('keypress.count', keypress?.count, failed(sample?.keypress))
+  fields('keypress', keypress, ['count', 'eventTimingCount'], failed(sample?.keypress))
   fields('keypress.duration', keypress?.duration, ['medianMs', 'p95Ms'], failed(sample?.keypress))
-  fields('keypress.inputDelay', keypress?.inputDelay, ['medianMs', 'p95Ms'], failed(sample?.keypress))
   return metrics
 }
 
@@ -53,7 +59,7 @@ export function flatten(sample?: Sample | null): Record<string, Scalar> {
 export function groupPerf(records: PerfRecord[]) {
   const groups = new Map<string, PerfRecord[]>()
   for (const record of records) {
-    const key = `${record.evalCommit}:${record.small ? 'small' : 'default'}`
+    const key = `${record.evalCommit}:${record.evalDiff ?? 'clean'}:${record.small ? 'small' : 'default'}`
     const group = groups.get(key) ?? []
     group.push(record)
     groups.set(key, group)
@@ -69,7 +75,7 @@ export function perfReport(records: PerfRecord[]) {
     const commits = new Map<string, string>()
     for (const record of group) for (const commit of record.commits) commits.set(commit, record.dates[commit] ?? '?')
     const passes = group.flatMap((record) => record.samples.map((pass) => ({ ...pass, metrics: flatten(pass.sample) })))
-    const lines = [`eval ${first.evalCommit} · ${first.small ? 'small' : 'default'} · ${group.map((r) => r.name).join(', ')}`]
+    const lines = [`eval ${first.evalCommit}${first.evalDiff ? ` + ${first.evalDiff}` : ''} · ${first.small ? 'small' : 'default'} · ${group.map((r) => r.name).join(', ')}`]
     for (const [key, empty] of Object.entries(flatten())) {
       lines.push('', key, 'commit              median            min–max    n   errors')
       for (const [commit, date] of commits) {

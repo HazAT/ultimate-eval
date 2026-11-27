@@ -197,13 +197,13 @@ export const resolveCommit = (repo: string, commit: string) => sh('git', ['rev-p
  * The Ultimate under test at `<tmp>/ultimate`, its packages installed: a shared clone writes nothing into the source
  * repository. Returns the clone's path.
  */
-export function cloneUltimate(repo: string, commit: string, tmp: string, log: (line: string) => void) {
+export function cloneUltimate(repo: string, commit: string, tmp: string, log: (line: string) => void, env?: NodeJS.ProcessEnv) {
   const clone = join(tmp, 'ultimate')
-  sh('git', ['clone', '-q', '--shared', '--no-checkout', repo, clone], '/')
-  sh('git', ['checkout', '-q', '--detach', commit], clone)
-  sh('git', ['remote', 'remove', 'origin'], clone)
+  sh('git', ['clone', '-q', '--shared', '--no-checkout', repo, clone], '/', env)
+  sh('git', ['checkout', '-q', '--detach', commit], clone, env)
+  sh('git', ['remote', 'remove', 'origin'], clone, env)
   log('installing packages')
-  sh('pnpm', ['install', '--frozen-lockfile', '--prefer-offline'], clone, cleanEnv())
+  sh('pnpm', ['install', '--frozen-lockfile', '--prefer-offline'], clone, env ?? cleanEnv())
   return clone
 }
 
