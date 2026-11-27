@@ -4,10 +4,13 @@ import { dirname, join } from 'node:path'
 import { Instance } from '../api.ts'
 import type { Entry } from '../api.ts'
 import { answerText } from '../score.ts'
-import { shortAnswer } from './fake.ts'
+import { longAnswer, shortAnswer } from './fake.ts'
 import type { Answer } from './fake.ts'
 
+export const longPrompt = 'Performance stream: long'
+
 export function seedAnswer(lastUserText: string): Answer {
+  if (lastUserText === longPrompt) return longAnswer(1600)
   const turn = /^Performance seed: transcript ([12]), turn (\d+)\.$/.exec(lastUserText)
   if (!turn) return shortAnswer
   const label = `${turn[1]}.${turn[2]}`
